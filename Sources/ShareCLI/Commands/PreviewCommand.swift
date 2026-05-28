@@ -54,12 +54,12 @@ struct PreviewCommand: ParsableCommand {
 
         print("")
         if let name = repoName {
-            var header = "  \(name)"
-            if let b = branch, b != "main" && b != "master" { header += " (\(b))" }
-            if projectType != .unknown { header += " [\(projectType)]" }
+            var header = "  " + Color.bold(name)
+            if let b = branch, b != "main" && b != "master" { header += " " + Color.cyan("(\(b))") }
+            if projectType != .unknown { header += " " + Color.dim("[\(projectType)]") }
             print(header)
         } else {
-            print("  \(URL(fileURLWithPath: cwd).lastPathComponent)")
+            print("  " + Color.bold(URL(fileURLWithPath: cwd).lastPathComponent))
         }
         print("")
 
@@ -67,46 +67,48 @@ struct PreviewCommand: ParsableCommand {
             switch item {
             case .file(let url):
                 let size = HumanReadable.fileSizeAt(url.path) ?? "?"
-                print("  📄 \(url.lastPathComponent)  (\(size))")
+                print("  " + Color.green("●") + " \(url.lastPathComponent)  " + Color.dim("(\(size))"))
             case .directory(let url):
                 let size = directorySize(url)
                 let fileCount = countFiles(url)
-                print("  📁 \(url.lastPathComponent)/  (\(size), \(fileCount) files)")
+                print("  " + Color.cyan("●") + " \(url.lastPathComponent)/  " + Color.dim("(\(size), \(fileCount) files)"))
 
                 if smart {
                     let excludes = ProjectDetector.excludes(for: projectType)
                     let wouldExclude = findExcludable(in: url, patterns: excludes)
                     if !wouldExclude.isEmpty {
-                        print("     --smart would exclude:")
+                        print("     " + Color.dim("--smart would exclude:"))
                         for name in wouldExclude.prefix(8) {
-                            print("       ✕ \(name)")
+                            print("       " + Color.red("✕") + " " + Color.dim(name))
                         }
                         if wouldExclude.count > 8 {
-                            print("       … and \(wouldExclude.count - 8) more")
+                            print("       " + Color.dim("… and \(wouldExclude.count - 8) more"))
                         }
                     }
                 }
 
                 let secrets = SecretsDetector.scan(directory: url)
                 if !secrets.isEmpty {
-                    print("     ⚠️  sensitive files detected:")
+                    print("     " + Color.yellow("⚠ sensitive files:"))
                     for s in secrets.prefix(5) {
-                        print("       ! \(s)")
+                        print("       " + Color.yellow("!") + " \(s)")
                     }
                 }
 
             case .url(let url):
-                print("  🔗 \(url.absoluteString)")
+                print("  " + Color.cyan("●") + " \(url.absoluteString)")
             case .text(let text):
-                print("  📝 \"\(text.prefix(60))\"  (\(text.count) chars)")
+                print("  " + Color.green("●") + " \"\(text.prefix(60))\"  " + Color.dim("(\(text.count) chars)"))
             }
         }
 
         print("")
         if resolved.contains(where: { if case .directory = $0 { return true }; return false }) {
             let archiveName = GitContext.smartArchiveName()
-            print("  Archive name: \(archiveName)-<timestamp>.zip")
-            print("  Tip: use --smart to exclude build artifacts")
+            print("  " + Color.dim("Archive: \(archiveName)-<timestamp>.zip"))
+            if !smart {
+                Log.hint("use --smart to exclude build artifacts")
+            }
         }
         print("")
     }

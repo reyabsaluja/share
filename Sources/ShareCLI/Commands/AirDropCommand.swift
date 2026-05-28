@@ -15,6 +15,9 @@ struct AirDropCommand: ParsableCommand {
     @Option(name: [.short, .long], help: "Custom archive name.")
     var name: String?
 
+    @Flag(name: .long, help: "Exclude .git, node_modules, .DS_Store, build caches.")
+    var smart = false
+
     @Flag(name: .long, help: "Do not zip directories.")
     var noZip = false
 
@@ -36,11 +39,25 @@ struct AirDropCommand: ParsableCommand {
 
         let resolved = try InputResolver.resolve(items)
 
+        let useSmart = (smart || ShareConfig.load().defaultSmart == true) && !noZip
+        let effectiveItems: [ShareItem]
+        if useSmart {
+            effectiveItems = try resolved.map { item -> ShareItem in
+                if case .directory(let url) = item {
+                    let cleaned = try SmartExclude.stage(directory: url, verbose: verbose)
+                    return .directory(cleaned)
+                }
+                return item
+            }
+        } else {
+            effectiveItems = resolved
+        }
+
         let prepared: [PreparedShareItem]
         if noZip {
-            prepared = resolved.map { $0.toPrepared() }
+            prepared = effectiveItems.map { $0.toPrepared() }
         } else {
-            prepared = try Packager.packageIfNeeded(items: resolved, archiveName: name, keepTemp: false, verbose: verbose)
+            prepared = try Packager.packageIfNeeded(items: effectiveItems, archiveName: name, keepTemp: false, verbose: verbose)
         }
 
         if dryRun {
@@ -49,9 +66,11 @@ struct AirDropCommand: ParsableCommand {
             } else {
                 for item in prepared {
                     if item.packaged, case .file(let url) = item.value {
-                        print("Would package → \(url.lastPathComponent)")
+                        let size = HumanReadable.fileSizeAt(url.path) ?? ""
+                        print("Would package → \(url.lastPathComponent) (\(size))")
+                    } else {
+                        print("Would AirDrop: \(item.displayName)")
                     }
-                    print("Would AirDrop: \(item.displayName)")
                 }
             }
             return
@@ -59,7 +78,10 @@ struct AirDropCommand: ParsableCommand {
 
         if !quiet {
             for item in prepared where item.packaged {
-                Log.info("Zipped → \(item.displayName)")
+                if case .file(let url) = item.value {
+                    let size = HumanReadable.fileSizeAt(url.path) ?? ""
+                    Log.info("Packaged → \(url.lastPathComponent) " + Color.dim("(\(size))"))
+                }
             }
             Log.info("Opening AirDrop…")
         }
@@ -68,6 +90,8 @@ struct AirDropCommand: ParsableCommand {
         app.setActivationPolicy(.accessory)
         let backend = AirDropBackend()
         try backend.share(prepared)
+
+        History.record(destination: "airdrop", recipient: nil, items: items.isEmpty ? ["."] : items, archivePath: prepared.first(where: \.packaged).flatMap { if case .file(let u) = $0.value { return u.path }; return nil })
 
         if json {
             print(JSONOutput.success(destination: "airdrop", backend: backend.name, items: prepared, openedNativeUI: true))

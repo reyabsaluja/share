@@ -32,6 +32,9 @@ struct EmailCommand: ParsableCommand {
     @Option(name: [.short, .long], help: "Archive name.")
     var name: String?
 
+    @Flag(name: .long, help: "Exclude .git, node_modules, .DS_Store, build caches.")
+    var smart = false
+
     @Flag(name: .long, help: "Send immediately (default is draft).")
     var send = false
 
@@ -62,7 +65,22 @@ struct EmailCommand: ParsableCommand {
         }
 
         let resolved = try InputResolver.resolve(items)
-        let prepared = try Packager.packageIfNeeded(items: resolved, archiveName: name, keepTemp: false, verbose: verbose)
+
+        let useSmart = smart || ShareConfig.load().defaultSmart == true
+        let effectiveItems: [ShareItem]
+        if useSmart {
+            effectiveItems = try resolved.map { item -> ShareItem in
+                if case .directory(let url) = item {
+                    let cleaned = try SmartExclude.stage(directory: url, verbose: verbose)
+                    return .directory(cleaned)
+                }
+                return item
+            }
+        } else {
+            effectiveItems = resolved
+        }
+
+        let prepared = try Packager.packageIfNeeded(items: effectiveItems, archiveName: name, keepTemp: false, verbose: verbose)
 
         if dryRun {
             if json {
@@ -97,6 +115,8 @@ struct EmailCommand: ParsableCommand {
         )
         let backend = MailBackend(options: options)
         try backend.share(prepared)
+
+        History.record(destination: "email", recipient: resolvedTo, items: items.isEmpty ? ["."] : items, archivePath: nil)
 
         if json {
             print(JSONOutput.success(destination: "email", backend: backend.name, items: prepared, openedNativeUI: !send))

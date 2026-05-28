@@ -121,6 +121,12 @@ struct MessagesCommand: ParsableCommand {
         let backend = MessagesBackend(options: options)
         try backend.share(prepared)
 
+        History.record(destination: "messages", recipient: resolvedRecipient, items: items, archivePath: nil)
+
+        if shouldSend {
+            Notifier.send(title: "share", message: "Sent to \(resolvedRecipient)")
+        }
+
         if json {
             print(JSONOutput.success(destination: "messages", backend: backend.name, items: prepared, openedNativeUI: !shouldSend))
         }

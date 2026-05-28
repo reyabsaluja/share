@@ -34,4 +34,9 @@ enum Color {
         guard enabled else { return text }
         return "\u{1B}[36m\(text)\u{1B}[0m"
     }
+
+    static func underline(_ text: String) -> String {
+        guard enabled else { return text }
+        return "\u{1B}[4m\(text)\u{1B}[0m"
+    }
 }

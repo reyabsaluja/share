@@ -51,11 +51,11 @@ struct CleanCommand: ParsableCommand {
         }
 
         if removedCount == 0 {
-            print("Nothing to clean.")
+            print("Nothing to clean " + Color.dim("(temp dir is empty)"))
         } else if dryRun {
-            print("\nWould free \(HumanReadable.fileSize(totalSize)) (\(removedCount) files)")
+            print("\nWould free " + Color.bold(HumanReadable.fileSize(totalSize)) + " (\(removedCount) files)")
         } else {
-            print("Cleaned \(HumanReadable.fileSize(totalSize)) (\(removedCount) files)")
+            Log.success("Cleaned \(HumanReadable.fileSize(totalSize)) (\(removedCount) files) ✓")
         }
     }
 }

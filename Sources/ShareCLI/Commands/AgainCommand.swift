@@ -14,6 +14,7 @@ struct AgainCommand: ParsableCommand {
     func run() throws {
         guard let entry = History.last() else {
             Log.error("no previous share action found")
+            Log.hint("try: share airdrop . or share email user@example.com")
             throw ExitCode.failure
         }
 
@@ -23,15 +24,16 @@ struct AgainCommand: ParsableCommand {
         let timeStr = formatter.string(from: entry.timestamp)
 
         if dryRun {
-            print("Last share (\(timeStr)):")
-            print("  destination: \(entry.destination)")
-            if let r = entry.recipient { print("  recipient:   \(r)") }
+            print("Last share " + Color.dim("(\(timeStr))") + ":")
+            print("  destination: " + Color.bold(entry.destination))
+            if let r = entry.recipient { print("  recipient:   " + Color.cyan(r)) }
             for item in entry.items { print("  item:        \(item)") }
             if let archive = entry.archivePath { print("  archive:     \(archive)") }
             return
         }
 
-        print("Repeating: share \(entry.destination)\(entry.recipient.map { " \($0)" } ?? "") \(entry.items.joined(separator: " "))")
+        let desc = "share \(entry.destination)\(entry.recipient.map { " \($0)" } ?? "") \(entry.items.joined(separator: " "))"
+        Log.info("Repeating: " + Color.bold(desc))
 
         var args = ["share", entry.destination]
         if let r = entry.recipient { args.append(r) }

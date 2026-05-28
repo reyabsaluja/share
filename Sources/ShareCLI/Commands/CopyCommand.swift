@@ -68,7 +68,8 @@ struct CopyCommand: ParsableCommand {
         pasteboard.setString(pathToCopy, forType: .string)
 
         if !quiet {
-            Log.info("Copied: \(pathToCopy)")
+            Log.success("Copied ✓")
+            fputs("  " + pathToCopy + "\n", stderr)
         }
     }
 }

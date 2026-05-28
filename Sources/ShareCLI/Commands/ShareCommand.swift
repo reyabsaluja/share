@@ -114,6 +114,7 @@ struct DefaultCommand: ParsableCommand {
     }
 
     private func runAirDrop(items: [String]) throws {
+        let startTime = CFAbsoluteTimeGetCurrent()
         let resolved = try InputResolver.resolve(items)
 
         if !yes && !dryRun {
@@ -126,11 +127,30 @@ struct DefaultCommand: ParsableCommand {
             }
         }
 
+        let useSmart = ShareConfig.load().defaultSmart == true
+        let effectiveItems: [ShareItem]
+        if useSmart && !noZip {
+            effectiveItems = try resolved.map { item -> ShareItem in
+                if case .directory(let url) = item {
+                    let cleaned = try SmartExclude.stage(directory: url, verbose: verbose)
+                    return .directory(cleaned)
+                }
+                return item
+            }
+        } else {
+            effectiveItems = resolved
+        }
+
         let prepared: [PreparedShareItem]
         if noZip {
-            prepared = resolved.map { $0.toPrepared() }
+            prepared = effectiveItems.map { $0.toPrepared() }
         } else {
-            prepared = try Packager.packageIfNeeded(items: resolved, archiveName: name, keepTemp: false, verbose: verbose)
+            prepared = try Packager.packageIfNeeded(items: effectiveItems, archiveName: name, keepTemp: false, verbose: verbose)
+        }
+
+        if verbose {
+            let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+            Log.debug("prepared in \(String(format: "%.2fs", elapsed))")
         }
 
         if dryRun {
@@ -150,6 +170,12 @@ struct DefaultCommand: ParsableCommand {
         }
 
         if !quiet {
+            for item in prepared {
+                if item.packaged, case .file(let url) = item.value {
+                    let size = HumanReadable.fileSizeAt(url.path) ?? ""
+                    Log.info("Packaged → \(url.lastPathComponent) " + Color.dim("(\(size))"))
+                }
+            }
             Log.info("Opening AirDrop…")
         }
 
@@ -167,6 +193,7 @@ struct DefaultCommand: ParsableCommand {
     }
 
     private func runEmail(to address: String, items: [String]) throws {
+        let startTime = CFAbsoluteTimeGetCurrent()
         let stdinText = StdinReader.readIfPiped()
         let resolved = try InputResolver.resolve(items)
 
@@ -196,6 +223,17 @@ struct DefaultCommand: ParsableCommand {
 
         if !quiet {
             Log.info("Drafting email to \(address)…")
+            for item in prepared where item.packaged {
+                if case .file(let url) = item.value {
+                    let size = HumanReadable.fileSizeAt(url.path) ?? ""
+                    Log.info("  Attached → \(url.lastPathComponent) " + Color.dim("(\(size))"))
+                }
+            }
+        }
+
+        if verbose {
+            let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+            Log.debug("prepared in \(String(format: "%.2fs", elapsed))")
         }
 
         let effectiveSubject = subject ?? GitContext.smartSubject()

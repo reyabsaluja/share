@@ -14,25 +14,21 @@ struct OpenCommand: ParsableCommand {
     @Flag(name: [.short, .long], help: "Reveal in Finder instead of opening.")
     var reveal = false
 
+    @Flag(name: .long, help: "Suppress non-error output.")
+    var quiet = false
+
     func run() throws {
+        Log.quiet = quiet
         let resolved = try InputResolver.resolve(items)
 
         for item in resolved {
             switch item {
             case .file(let url), .directory(let url):
-                if reveal {
-                    let process = Process()
-                    process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-                    process.arguments = ["-R", url.path]
-                    try process.run()
-                    process.waitUntilExit()
-                } else {
-                    let process = Process()
-                    process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-                    process.arguments = [url.path]
-                    try process.run()
-                    process.waitUntilExit()
-                }
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+                process.arguments = reveal ? ["-R", url.path] : [url.path]
+                try process.run()
+                process.waitUntilExit()
             case .url(let url):
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
