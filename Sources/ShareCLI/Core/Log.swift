@@ -11,14 +11,19 @@ enum Log {
 
     static func debug(_ message: String) {
         guard verbose else { return }
-        fputs("\(message)\n", stderr)
+        fputs(Color.dim(message) + "\n", stderr)
     }
 
     static func error(_ message: String) {
-        fputs("share: \(message)\n", stderr)
+        fputs(Color.red("share: \(message)") + "\n", stderr)
     }
 
     static func hint(_ message: String) {
-        fputs("hint: \(message)\n", stderr)
+        fputs(Color.dim("hint: \(message)") + "\n", stderr)
+    }
+
+    static func success(_ message: String) {
+        guard !quiet else { return }
+        fputs(Color.green(message) + "\n", stderr)
     }
 }

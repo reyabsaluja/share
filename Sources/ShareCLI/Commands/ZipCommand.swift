@@ -108,9 +108,9 @@ struct ZipCommand: ParsableCommand {
             print(String(data: data, encoding: .utf8) ?? "{}")
         } else {
             let size = HumanReadable.fileSizeAt(zipURL.path) ?? ""
-            print("\(zipURL.path) (\(size))")
+            print("\(zipURL.path) " + Color.dim("(\(size))"))
             if !noCopy && !quiet {
-                Log.info("Copied to clipboard ✓")
+                Log.success("Copied to clipboard ✓")
             }
         }
     }

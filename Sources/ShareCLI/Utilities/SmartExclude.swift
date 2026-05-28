@@ -34,7 +34,9 @@ enum SmartExclude {
 
         let projectType = ProjectDetector.detect(at: directory)
         let projectExcludes = ProjectDetector.excludes(for: projectType)
-        let allExcludes = excludedNames.union(projectExcludes)
+        let shareIgnorePatterns = ShareIgnore.loadPatterns(from: directory)
+        let ignoreSet = Set(shareIgnorePatterns.map { $0.hasSuffix("/") ? String($0.dropLast()) : $0 })
+        let allExcludes = excludedNames.union(projectExcludes).union(ignoreSet)
 
         guard let enumerator = fm.enumerator(
             at: directory,

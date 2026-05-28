@@ -52,19 +52,21 @@ struct DoctorCommand: ParsableCommand {
             let data = try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys])
             print(String(data: data, encoding: .utf8) ?? "{}")
         } else {
-            print("\nshare doctor\n")
+            print("\n" + Color.bold("share doctor") + "\n")
             let allPassed = checks.allSatisfy { $0.1 }
             for (name, ok, detail) in checks {
-                let icon = ok ? "✅" : "❌"
+                let icon = ok ? Color.green("✓") : Color.red("✗")
                 let paddedName = name.padding(toLength: 12, withPad: " ", startingAt: 0)
-                print("\(paddedName)  \(detail) \(icon)")
+                let detailStr = ok ? detail : Color.red(detail)
+                print("  \(icon) \(paddedName) \(detailStr)")
             }
             print("")
             if allPassed {
-                print("All checks passed.")
+                print(Color.green("  All checks passed."))
             } else {
-                print("Some checks failed. See above for details.")
+                print(Color.red("  Some checks failed."))
             }
+            print("")
         }
     }
 
