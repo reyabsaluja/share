@@ -91,6 +91,9 @@ final class MailBackend: SharingBackend {
             tell application "Mail"
                 set newMessage to make new outgoing message with properties {subject:subjectText, content:bodyText, visible:true}
                 tell newMessage
+                    if fromAddress is not "" then
+                        set sender of newMessage to fromAddress
+                    end if
                     make new to recipient at end of to recipients with properties {address:toAddress}
                     if ccAddress is not "" then
                         make new cc recipient at end of cc recipients with properties {address:ccAddress}
