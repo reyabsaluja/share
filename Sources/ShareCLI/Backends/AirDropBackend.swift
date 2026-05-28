@@ -40,8 +40,16 @@ final class AirDropBackend: NSObject, SharingBackend, NSSharingServiceDelegate {
         let timeout = Date(timeIntervalSinceNow: 300)
         while !sharingComplete && RunLoop.main.run(mode: .default, before: timeout) {}
 
+        if !sharingComplete {
+            throw ShareError.packagingFailed("AirDrop timed out (no response after 5 minutes)")
+        }
+
         if let error = sharingError {
             throw ShareError.packagingFailed(error.localizedDescription)
+        }
+
+        if isIndividualSharing && individualSuccessCount == 0 && individualFailCount > 0 {
+            throw ShareError.packagingFailed("AirDrop failed for all items")
         }
     }
 
