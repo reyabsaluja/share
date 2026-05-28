@@ -89,11 +89,16 @@ struct EmailCommand: ParsableCommand {
                 print("Would email \(resolvedTo)")
                 if let s = subject { print("  subject: \(s)") }
                 for item in prepared {
-                    print("  attach:  \(item.displayName)")
+                    let size = item.sizeBytes.map { HumanReadable.fileSize($0) } ?? ""
+                    print("  attach:  \(item.displayName) " + Color.dim("(\(size))"))
                 }
                 if send { print("  action:  send") } else { print("  action:  draft") }
             }
             return
+        }
+
+        guard SizeWarning.check(items: prepared, destination: "email", quiet: quiet) else {
+            throw ShareError.userCancelled
         }
 
         if !quiet {

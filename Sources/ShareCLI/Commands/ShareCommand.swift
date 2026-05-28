@@ -89,7 +89,7 @@ struct DefaultCommand: ParsableCommand {
         Log.verbose = verbose
         Log.quiet = quiet
 
-        let args = remaining.filter { !$0.hasPrefix("-") }
+        let args = remaining.filter { !$0.hasPrefix("-") || InputResolver.existsAsFile($0) }
 
         if args.isEmpty {
             try runAirDrop(items: [])
@@ -99,7 +99,9 @@ struct DefaultCommand: ParsableCommand {
         let first = args[0]
         let rest = Array(args.dropFirst())
 
-        if let destination = SmartRouter.detect(first) {
+        if InputResolver.existsAsFile(first) {
+            try runAirDrop(items: args)
+        } else if let destination = SmartRouter.detect(first) {
             switch destination {
             case .email(let address):
                 try runEmail(to: address, items: rest)
@@ -221,6 +223,12 @@ struct DefaultCommand: ParsableCommand {
             return
         }
 
+        if !yes {
+            guard SizeWarning.check(items: prepared, destination: "email", quiet: quiet) else {
+                throw ShareError.userCancelled
+            }
+        }
+
         if !quiet {
             Log.info("Drafting email to \(address)…")
             for item in prepared where item.packaged {
@@ -263,20 +271,10 @@ struct DefaultCommand: ParsableCommand {
         for item in items {
             if InputResolver.isURL(item) {
                 textParts.append(item)
+            } else if InputResolver.existsAsFile(item) {
+                fileParts.append(item)
             } else {
-                let expanded = NSString(string: item).expandingTildeInPath
-                let resolved: URL
-                if expanded.hasPrefix("/") {
-                    resolved = URL(fileURLWithPath: expanded)
-                } else {
-                    resolved = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-                        .appendingPathComponent(expanded)
-                }
-                if FileManager.default.fileExists(atPath: resolved.standardized.path) {
-                    fileParts.append(item)
-                } else {
-                    textParts.append(item)
-                }
+                textParts.append(item)
             }
         }
 

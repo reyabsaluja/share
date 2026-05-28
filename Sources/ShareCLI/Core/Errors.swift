@@ -1,6 +1,6 @@
 import Foundation
 
-enum ShareError: Error, CustomStringConvertible {
+enum ShareError: Error, LocalizedError, CustomStringConvertible {
     case usage(String)
     case inputNotFound(String)
     case invalidURL(String)
@@ -35,4 +35,6 @@ enum ShareError: Error, CustomStringConvertible {
         case .userCancelled: return "cancelled by user"
         }
     }
+
+    var errorDescription: String? { description }
 }

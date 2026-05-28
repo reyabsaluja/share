@@ -48,20 +48,10 @@ struct MessagesCommand: ParsableCommand {
         for item in items {
             if InputResolver.isURL(item) {
                 textParts.append(item)
+            } else if InputResolver.existsAsFile(item) {
+                fileParts.append(item)
             } else {
-                let expanded = NSString(string: item).expandingTildeInPath
-                let resolved: URL
-                if expanded.hasPrefix("/") {
-                    resolved = URL(fileURLWithPath: expanded)
-                } else {
-                    resolved = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-                        .appendingPathComponent(expanded)
-                }
-                if FileManager.default.fileExists(atPath: resolved.standardized.path) {
-                    fileParts.append(item)
-                } else {
-                    textParts.append(item)
-                }
+                textParts.append(item)
             }
         }
 

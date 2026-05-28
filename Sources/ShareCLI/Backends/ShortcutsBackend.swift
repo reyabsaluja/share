@@ -34,10 +34,10 @@ final class ShortcutsBackend: SharingBackend {
             process.standardError = errorPipe
 
             try process.run()
+            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
 
             if process.terminationStatus != 0 {
-                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
                 let errorMsg = String(data: errorData, encoding: .utf8) ?? "unknown error"
                 throw ShareError.packagingFailed("shortcuts run failed: \(errorMsg)")
             }
@@ -51,11 +51,16 @@ final class ShortcutsBackend: SharingBackend {
 
         let outputPipe = Pipe()
         process.standardOutput = outputPipe
+        process.standardError = FileHandle.nullDevice
 
         try process.run()
+        let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
 
-        let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        guard process.terminationStatus == 0 else {
+            throw ShareError.backendUnavailable("Could not list shortcuts. Is Shortcuts.app installed?")
+        }
+
         let output = String(data: data, encoding: .utf8) ?? ""
         return output.components(separatedBy: .newlines).filter { !$0.isEmpty }
     }

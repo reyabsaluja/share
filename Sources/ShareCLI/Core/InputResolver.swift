@@ -13,15 +13,7 @@ struct InputResolver {
                 }
                 items.append(.url(url))
             } else {
-                let expanded = NSString(string: arg).expandingTildeInPath
-                let resolved: URL
-                if expanded.hasPrefix("/") {
-                    resolved = URL(fileURLWithPath: expanded)
-                } else {
-                    resolved = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-                        .appendingPathComponent(expanded)
-                }
-                let standardized = resolved.standardized
+                let standardized = expandPath(arg)
 
                 var isDir: ObjCBool = false
                 guard FileManager.default.fileExists(atPath: standardized.path, isDirectory: &isDir) else {
@@ -37,6 +29,20 @@ struct InputResolver {
         }
 
         return items
+    }
+
+    static func expandPath(_ arg: String) -> URL {
+        let expanded = NSString(string: arg).expandingTildeInPath
+        if expanded.hasPrefix("/") {
+            return URL(fileURLWithPath: expanded).standardized
+        }
+        return URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent(expanded).standardized
+    }
+
+    static func existsAsFile(_ arg: String) -> Bool {
+        let url = expandPath(arg)
+        return FileManager.default.fileExists(atPath: url.path)
     }
 
     static func isURL(_ string: String) -> Bool {
