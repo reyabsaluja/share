@@ -15,20 +15,20 @@ final class MessagesBackend: SharingBackend {
     }
 
     func share(_ items: [PreparedShareItem]) throws {
-        let textParts: [String] = items.compactMap { item in
-            switch item.value {
-            case .url(let url): return url.absoluteString
-            case .text(let text): return text
-            case .file(let url): return url.path
-            }
-        }
-
-        let messageText = options.text ?? textParts.joined(separator: "\n")
-
         let hasFiles = items.contains { item in
             if case .file = item.value { return true }
             return false
         }
+
+        let textParts: [String] = items.compactMap { item in
+            switch item.value {
+            case .url(let url): return url.absoluteString
+            case .text(let text): return text
+            case .file: return nil
+            }
+        }
+
+        let messageText = options.text ?? textParts.joined(separator: "\n")
 
         if hasFiles {
             try shareWithFiles(items: items, messageText: messageText)
