@@ -71,6 +71,8 @@ struct Packager {
             for item in prepared where item.kind == .file {
                 if case .file(let url) = item.value {
                     filesToStage.append(url)
+                    let dest = stagingDir.appendingPathComponent(url.lastPathComponent)
+                    try FileManager.default.copyItem(at: url, to: dest)
                 }
             }
 
