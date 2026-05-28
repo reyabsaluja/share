@@ -50,6 +50,6 @@ enum History {
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = .prettyPrinted
         guard let data = try? encoder.encode(entries) else { return }
-        try? data.write(to: fileURL)
+        try? data.write(to: fileURL, options: .atomic)
     }
 }
