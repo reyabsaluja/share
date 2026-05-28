@@ -41,29 +41,30 @@ enum SmartExclude {
         guard let enumerator = fm.enumerator(
             at: directory,
             includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
-            options: [.producesRelativePathURLs]
+            options: []
         ) else {
             throw ShareError.packagingFailed("Cannot enumerate directory")
         }
 
+        let basePath = directory.standardized.path
         var skippedCount = 0
 
         for case let url as URL in enumerator {
-            let components = url.relativePath.split(separator: "/").map(String.init)
+            let fullPath = url.standardized.path
+            let relativePath = String(fullPath.dropFirst(basePath.count + 1))
+            let components = relativePath.split(separator: "/").map(String.init)
 
             let shouldExclude = components.contains { allExcludes.contains($0) }
             if shouldExclude {
-                if url.hasDirectoryPath {
-                    enumerator.skipDescendants()
-                }
+                enumerator.skipDescendants()
                 skippedCount += 1
                 continue
             }
 
-            let destURL = destDir.appendingPathComponent(url.relativePath)
+            let destURL = destDir.appendingPathComponent(relativePath)
 
             var isDir: ObjCBool = false
-            fm.fileExists(atPath: url.path, isDirectory: &isDir)
+            fm.fileExists(atPath: fullPath, isDirectory: &isDir)
 
             if isDir.boolValue {
                 try fm.createDirectory(at: destURL, withIntermediateDirectories: true)
