@@ -167,10 +167,10 @@ struct Packager {
         let pipe = Pipe()
         process.standardError = pipe
         try process.run()
+        let errorData = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
 
         guard process.terminationStatus == 0 else {
-            let errorData = pipe.fileHandleForReading.readDataToEndOfFile()
             let errorMsg = String(data: errorData, encoding: .utf8) ?? "unknown error"
             throw ShareError.packagingFailed("ditto failed: \(errorMsg)")
         }

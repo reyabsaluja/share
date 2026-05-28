@@ -64,10 +64,10 @@ final class MessagesBackend: SharingBackend {
         process.standardError = errorPipe
 
         try process.run()
+        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
 
         if process.terminationStatus != 0 {
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
             let errorMsg = String(data: errorData, encoding: .utf8) ?? "unknown error"
 
             if errorMsg.contains("not allowed") || errorMsg.contains("permission") {
@@ -120,10 +120,10 @@ final class MessagesBackend: SharingBackend {
         process.standardError = errorPipe
 
         try process.run()
+        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
 
         if process.terminationStatus != 0 {
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
             let errorMsg = String(data: errorData, encoding: .utf8) ?? "unknown error"
 
             if errorMsg.contains("not allowed") || errorMsg.contains("permission") {
