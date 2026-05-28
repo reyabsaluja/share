@@ -16,6 +16,9 @@ struct DiffCommand: ParsableCommand {
     @Option(name: [.short, .long], help: "Email subject.")
     var subject: String?
 
+    @Flag(name: .long, help: "Send immediately (email defaults to draft).")
+    var send = false
+
     @Flag(name: .long, help: "Show what would happen.")
     var dryRun = false
 
@@ -34,10 +37,12 @@ struct DiffCommand: ParsableCommand {
 
         guard let diff = diffContent, !diff.isEmpty else {
             Log.error("no changes to share" + (staged ? " (staged)" : ""))
+            Log.hint("make some changes first, or use --staged for staged changes")
             throw ExitCode.failure
         }
 
         let effectiveSubject = subject ?? GitContext.smartSubject(for: staged ? "Staged changes" : "Changes")
+        let lineCount = diff.components(separatedBy: .newlines).count
 
         if let destination = SmartRouter.detect(recipient) {
             switch destination {
@@ -45,17 +50,21 @@ struct DiffCommand: ParsableCommand {
                 if dryRun {
                     print("Would email diff to \(address)")
                     print("  subject: \(effectiveSubject)")
-                    print("  diff: \(diff.components(separatedBy: .newlines).count) lines")
+                    print("  diff: \(lineCount) lines")
+                    print("  action: \(send ? "send" : "draft")")
                     return
                 }
 
-                if !quiet { Log.info("Emailing diff to \(address)…") }
+                if !quiet {
+                    if send { Log.info("Sending diff to \(address)…") }
+                    else { Log.info("Drafting diff to \(address)… " + Color.dim("(\(lineCount) lines)")) }
+                }
 
                 let options = MailOptions(
                     to: address,
                     subject: effectiveSubject,
                     body: diff,
-                    send: false
+                    send: send
                 )
                 let backend = MailBackend(options: options)
                 try backend.share([])
@@ -65,19 +74,21 @@ struct DiffCommand: ParsableCommand {
 
                 if dryRun {
                     print("Would message diff to \(phone)")
-                    print("  lines: \(diff.components(separatedBy: .newlines).count)")
+                    print("  lines: \(lineCount)")
                     return
                 }
 
-                if !quiet { Log.info("Sending diff to \(phone)…") }
+                if !quiet { Log.info("Sending diff to \(phone)… " + Color.dim("(\(lineCount) lines)")) }
 
                 let options = MessagesOptions(recipient: phone, text: truncated, send: true)
                 let backend = MessagesBackend(options: options)
-                try backend.share([ShareItem.text(truncated).toPrepared()])
+                try backend.share([])
 
             case .airdrop:
-                break
+                throw ShareError.usage("Cannot AirDrop a diff. Use an email or phone recipient.")
             }
+
+            History.record(destination: "diff", recipient: recipient, items: [staged ? "--staged" : "HEAD"], archivePath: nil)
         } else {
             throw ShareError.usage("Recipient must be an email or phone number")
         }

@@ -20,34 +20,32 @@ enum SecretsDetector {
     ]
 
     static func scan(directory: URL) -> [String] {
-        var found: [String] = []
+        var found: Set<String> = []
         let fm = FileManager.default
+        let basePath = directory.standardized.path
 
         guard let enumerator = fm.enumerator(
             at: directory,
             includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
+            options: []
         ) else { return [] }
 
-        // Also check top-level hidden files
-        if let topLevel = try? fm.contentsOfDirectory(atPath: directory.path) {
-            for name in topLevel {
-                if isSensitive(name) {
-                    found.append(name)
-                }
-            }
-        }
+        let skipDirs: Set<String> = [".git", "node_modules", ".build", "DerivedData", "__pycache__", "Pods", ".gradle"]
 
         while let url = enumerator.nextObject() as? URL {
-            if isSensitive(url.lastPathComponent) {
-                let relative = url.path.replacingOccurrences(of: directory.path + "/", with: "")
-                if !found.contains(relative) {
-                    found.append(relative)
-                }
+            let name = url.lastPathComponent
+            if skipDirs.contains(name) {
+                enumerator.skipDescendants()
+                continue
+            }
+            if isSensitive(name) {
+                let fullPath = url.standardized.path
+                let relative = String(fullPath.dropFirst(basePath.count + 1))
+                found.insert(relative)
             }
         }
 
-        return found
+        return Array(found).sorted()
     }
 
     static func isSensitive(_ filename: String) -> Bool {

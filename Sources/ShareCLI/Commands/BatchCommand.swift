@@ -44,14 +44,15 @@ struct BatchCommand: ParsableCommand {
 
         if dryRun {
             for recipient in recipientList {
-                let dest = SmartRouter.detect(recipient)
+                let resolved = Aliases.resolve(recipient) ?? recipient
+                let dest = SmartRouter.detect(resolved)
                 let destName: String
                 switch dest {
                 case .email: destName = "email"
                 case .messages: destName = "messages"
-                case .airdrop, .none: destName = "airdrop"
+                case .airdrop, .none: destName = "skipped (not email/phone)"
                 }
-                print("Would share via \(destName) to \(recipient)")
+                print("Would share via \(destName) to \(resolved)")
             }
             for item in prepared {
                 print("  item: \(item.displayName)")

@@ -12,14 +12,14 @@ struct TextCommand: ParsableCommand {
     @Argument(help: "Text to share. If omitted, reads from stdin or clipboard.")
     var words: [String] = []
 
-    @Option(name: [.short, .long], help: "Destination: airdrop, email, messages, copy.")
+    @Option(name: [.short, .long], help: "Recipient (email, phone, or @alias). If omitted, copies to clipboard.")
     var to: String?
-
-    @Option(name: .long, help: "Recipient (for email/messages).")
-    var recipient: String?
 
     @Flag(name: .long, help: "Read from clipboard instead of stdin.")
     var clipboard = false
+
+    @Flag(name: .long, help: "Send immediately (for messages).")
+    var send = false
 
     @Flag(name: .long, help: "Show what would happen.")
     var dryRun = false
@@ -44,8 +44,48 @@ struct TextCommand: ParsableCommand {
             throw ShareError.usage("Provide text as arguments, pipe from stdin, or use --clipboard")
         }
 
+        if let recipient = to {
+            let resolved = Aliases.resolve(recipient) ?? recipient
+
+            if dryRun {
+                let dest = SmartRouter.detect(resolved)
+                let destName: String
+                switch dest {
+                case .email: destName = "email"
+                case .messages: destName = "messages"
+                case .airdrop, .none: destName = "clipboard"
+                }
+                print("Would share via \(destName) to \(resolved)")
+                print("  text: \(text.prefix(80))")
+                return
+            }
+
+            if let destination = SmartRouter.detect(resolved) {
+                switch destination {
+                case .email(let address):
+                    if !quiet { Log.info("Drafting to \(address)…") }
+                    let options = MailOptions(to: address, subject: "Shared text", body: text, send: false)
+                    let backend = MailBackend(options: options)
+                    try backend.share([])
+
+                case .messages(let phone):
+                    if !quiet {
+                        if send { Log.info("Sending to \(phone)…") }
+                        else { Log.info("Opening Messages to \(phone)…") }
+                    }
+                    let options = MessagesOptions(recipient: phone, text: text, send: send)
+                    let backend = MessagesBackend(options: options)
+                    try backend.share([])
+
+                case .airdrop:
+                    break
+                }
+                return
+            }
+        }
+
         if dryRun {
-            print("Would share text (\(text.count) chars): \(text.prefix(80))")
+            print("Would copy to clipboard (\(text.count) chars): \(text.prefix(80))")
             return
         }
 
@@ -54,7 +94,7 @@ struct TextCommand: ParsableCommand {
         pasteboard.setString(text, forType: .string)
 
         if !quiet {
-            Log.info("Copied to clipboard (\(text.count) chars) ✓")
+            Log.success("Copied to clipboard (\(text.count) chars) ✓")
         }
     }
 }

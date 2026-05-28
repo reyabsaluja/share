@@ -95,6 +95,8 @@ struct ZipCommand: ParsableCommand {
             pasteboard.setString(zipURL.path, forType: .string)
         }
 
+        History.record(destination: "zip", recipient: nil, items: items.isEmpty ? ["."] : items, archivePath: zipURL.path)
+
         if json {
             let size = (try? FileManager.default.attributesOfItem(atPath: zipURL.path)[.size] as? Int64) ?? 0
             let result: [String: Any] = [

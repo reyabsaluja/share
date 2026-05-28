@@ -35,8 +35,7 @@ enum SmartExclude {
         let projectType = ProjectDetector.detect(at: directory)
         let projectExcludes = ProjectDetector.excludes(for: projectType)
         let shareIgnorePatterns = ShareIgnore.loadPatterns(from: directory)
-        let ignoreSet = Set(shareIgnorePatterns.map { $0.hasSuffix("/") ? String($0.dropLast()) : $0 })
-        let allExcludes = excludedNames.union(projectExcludes).union(ignoreSet)
+        let nameExcludes = excludedNames.union(projectExcludes)
 
         guard let enumerator = fm.enumerator(
             at: directory,
@@ -54,8 +53,11 @@ enum SmartExclude {
             let relativePath = String(fullPath.dropFirst(basePath.count + 1))
             let components = relativePath.split(separator: "/").map(String.init)
 
-            let shouldExclude = components.contains { allExcludes.contains($0) }
-            if shouldExclude {
+            let excludedByName = components.contains { nameExcludes.contains($0) }
+            let excludedByPattern = !shareIgnorePatterns.isEmpty && components.contains { component in
+                ShareIgnore.shouldExclude(name: component, patterns: shareIgnorePatterns)
+            }
+            if excludedByName || excludedByPattern {
                 enumerator.skipDescendants()
                 skippedCount += 1
                 continue

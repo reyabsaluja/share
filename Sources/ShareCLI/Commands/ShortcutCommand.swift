@@ -83,6 +83,8 @@ struct ShortcutCommand: ParsableCommand {
         let backend = ShortcutsBackend(shortcutName: scName, outputPath: output)
         try backend.share(prepared)
 
+        History.record(destination: "shortcut", recipient: scName, items: items.isEmpty ? ["."] : items, archivePath: nil)
+
         if json {
             print(JSONOutput.success(destination: "shortcut", backend: backend.name, items: prepared, openedNativeUI: false))
         }
