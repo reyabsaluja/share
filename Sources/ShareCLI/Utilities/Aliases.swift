@@ -41,6 +41,6 @@ enum Aliases {
         let dir = configURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let data = try JSONEncoder().encode(aliases)
-        try data.write(to: configURL)
+        try data.write(to: configURL, options: .atomic)
     }
 }

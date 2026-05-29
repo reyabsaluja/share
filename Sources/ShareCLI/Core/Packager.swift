@@ -68,10 +68,18 @@ struct Packager {
                 try FileManager.default.copyItem(at: dirURL, to: dest)
             }
 
+            var seenNames = Set<String>()
             for item in prepared where item.kind == .file {
                 if case .file(let url) = item.value {
                     filesToStage.append(url)
-                    let dest = stagingDir.appendingPathComponent(url.lastPathComponent)
+                    var destName = url.lastPathComponent
+                    while seenNames.contains(destName) {
+                        let stem = (destName as NSString).deletingPathExtension
+                        let ext = (destName as NSString).pathExtension
+                        destName = ext.isEmpty ? "\(stem)_copy" : "\(stem)_copy.\(ext)"
+                    }
+                    seenNames.insert(destName)
+                    let dest = stagingDir.appendingPathComponent(destName)
                     try FileManager.default.copyItem(at: url, to: dest)
                 }
             }

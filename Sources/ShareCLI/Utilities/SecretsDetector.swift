@@ -58,18 +58,23 @@ enum SecretsDetector {
         return false
     }
 
-    static func warnIfNeeded(directory: URL, quiet: Bool) -> Bool {
+    static func warnIfNeeded(directory: URL, quiet: Bool, autoConfirm: Bool = false) -> Bool {
         let secrets = scan(directory: directory)
         guard !secrets.isEmpty else { return true }
 
-        if quiet { return true }
-
-        Log.error("this folder contains files that may be sensitive:")
-        for secret in secrets.prefix(10) {
-            fputs("  \(secret)\n", stderr)
+        if !quiet {
+            Log.error("this folder contains files that may be sensitive:")
+            for secret in secrets.prefix(10) {
+                fputs("  \(secret)\n", stderr)
+            }
+            if secrets.count > 10 {
+                fputs("  … and \(secrets.count - 10) more\n", stderr)
+            }
         }
-        if secrets.count > 10 {
-            fputs("  … and \(secrets.count - 10) more\n", stderr)
+
+        if autoConfirm {
+            if !quiet { Log.error("proceeding due to --yes (secrets detected above)") }
+            return true
         }
 
         guard isatty(fileno(stdin)) != 0 else {

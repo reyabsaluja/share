@@ -7,9 +7,9 @@ enum Destination {
 }
 
 enum SmartRouter {
-    static func detect(_ firstArg: String) -> Destination? {
-        if let resolved = Aliases.resolve(firstArg) {
-            return detect(resolved)
+    static func detect(_ firstArg: String, depth: Int = 0) -> Destination? {
+        if depth < 10, let resolved = Aliases.resolve(firstArg) {
+            return detect(resolved, depth: depth + 1)
         }
         if looksLikeEmail(firstArg) {
             return .email(firstArg)

@@ -13,5 +13,6 @@ enum Notifier {
         process.standardError = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         try? process.run()
+        process.waitUntilExit()
     }
 }

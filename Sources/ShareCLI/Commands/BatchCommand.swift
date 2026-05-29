@@ -108,6 +108,10 @@ struct BatchCommand: ParsableCommand {
             }
         }
 
+        if successes == 0 && failures > 0 {
+            throw ShareError.backendUnavailable("All \(failures) recipients failed")
+        }
+
         History.record(
             destination: "batch",
             recipient: recipientList.joined(separator: ","),

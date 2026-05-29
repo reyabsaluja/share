@@ -50,6 +50,7 @@ enum SmartExclude {
 
         for case let url as URL in enumerator {
             let fullPath = url.standardized.path
+            guard fullPath.count > basePath.count else { continue }
             let relativePath = String(fullPath.dropFirst(basePath.count + 1))
             let components = relativePath.split(separator: "/").map(String.init)
 
@@ -61,6 +62,15 @@ enum SmartExclude {
                 enumerator.skipDescendants()
                 skippedCount += 1
                 continue
+            }
+
+            let resourceValues = try? url.resourceValues(forKeys: [.isSymbolicLinkKey])
+            if resourceValues?.isSymbolicLink == true {
+                let resolved = url.resolvingSymlinksInPath().standardized.path
+                if !resolved.hasPrefix(basePath + "/") {
+                    skippedCount += 1
+                    continue
+                }
             }
 
             let destURL = destDir.appendingPathComponent(relativePath)

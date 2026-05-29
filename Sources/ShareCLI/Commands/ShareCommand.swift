@@ -119,10 +119,10 @@ struct DefaultCommand: ParsableCommand {
         let startTime = CFAbsoluteTimeGetCurrent()
         let resolved = try InputResolver.resolve(items)
 
-        if !yes && !dryRun {
+        if !dryRun {
             for item in resolved {
                 if case .directory(let url) = item {
-                    guard SecretsDetector.warnIfNeeded(directory: url, quiet: quiet) else {
+                    guard SecretsDetector.warnIfNeeded(directory: url, quiet: quiet, autoConfirm: yes) else {
                         throw ShareError.userCancelled
                     }
                 }
@@ -199,10 +199,10 @@ struct DefaultCommand: ParsableCommand {
         let stdinText = StdinReader.readIfPiped()
         let resolved = try InputResolver.resolve(items)
 
-        if !yes && !dryRun {
+        if !dryRun {
             for item in resolved {
                 if case .directory(let url) = item {
-                    guard SecretsDetector.warnIfNeeded(directory: url, quiet: quiet) else {
+                    guard SecretsDetector.warnIfNeeded(directory: url, quiet: quiet, autoConfirm: yes) else {
                         throw ShareError.userCancelled
                     }
                 }

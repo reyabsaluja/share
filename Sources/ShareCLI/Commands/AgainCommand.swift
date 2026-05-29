@@ -32,6 +32,14 @@ struct AgainCommand: ParsableCommand {
             return
         }
 
+        let knownDestinations: Set<String> = [
+            "airdrop", "email", "messages", "msg", "shortcut", "zip",
+            "copy", "text", "diff", "batch", "qr", "screenshot", "open"
+        ]
+        guard knownDestinations.contains(entry.destination) else {
+            throw ShareError.usage("Invalid history entry destination: '\(entry.destination)'")
+        }
+
         let desc = "share \(entry.destination)\(entry.recipient.map { " \($0)" } ?? "") \(entry.items.joined(separator: " "))"
         Log.info("Repeating: " + Color.bold(desc))
 
