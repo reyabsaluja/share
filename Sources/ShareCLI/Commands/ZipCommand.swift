@@ -6,10 +6,7 @@ struct ZipCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "zip",
         abstract: "Package files and folders into a zip archive.",
-        discussion: """
-        Without --output the archive goes to the scratch directory and its path is copied
-        to the clipboard. --output may be a file path or an existing directory.
-        """
+        discussion: "Without --output the archive goes to the scratch directory and its path is copied to the clipboard. --output may be a file path or an existing directory."
     )
 
     @Argument(help: "Files or directories to package. Defaults to the current directory.")

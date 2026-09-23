@@ -5,10 +5,7 @@ struct EmailCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "email",
         abstract: "Create a Mail.app draft (or send) with the items attached.",
-        discussion: """
-        URLs and text become part of the body; files and zipped directories are attached.
-        Piped stdin is appended to the body. Use --send to send without reviewing.
-        """,
+        discussion: "URLs and text become part of the body; files and zipped directories are attached. Piped stdin is appended to the body. Use --send to send without reviewing.",
         aliases: ["mail", "em"]
     )
 

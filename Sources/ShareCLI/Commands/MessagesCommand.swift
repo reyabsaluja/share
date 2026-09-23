@@ -5,11 +5,7 @@ struct MessagesCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "messages",
         abstract: "Share via Messages (iMessage or SMS).",
-        discussion: """
-        Arguments that are not existing files become the message text. Without --send, the
-        conversation opens with the text pre-filled and any files on the clipboard (⌘V to attach).
-        With --send, text and files go out immediately.
-        """,
+        discussion: "Arguments that are not existing files become the message text. Without --send, the conversation opens with the text pre-filled and any files on the clipboard (⌘V to attach). With --send, text and files go out immediately.",
         aliases: ["message", "msg", "im", "sms"]
     )
 

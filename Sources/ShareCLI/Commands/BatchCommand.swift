@@ -5,10 +5,7 @@ struct BatchCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "batch",
         abstract: "Share the same items with several recipients at once.",
-        discussion: """
-        Recipients are comma-separated and may mix emails, phone numbers and @aliases
-        (including group aliases). Items are packaged once and reused for every recipient.
-        """,
+        discussion: "Recipients are comma-separated and may mix emails, phone numbers and @aliases (including group aliases). Items are packaged once and reused for every recipient.",
         aliases: ["multi"]
     )
 

@@ -6,11 +6,7 @@ struct AirDropCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "airdrop",
         abstract: "Share via AirDrop (opens the native device picker).",
-        discussion: """
-        Directories are zipped first. Several directories, or directories mixed with files,
-        become one bundle. Use --no-zip to send a folder as-is, or --smart to leave out
-        dependencies, build output and secrets.
-        """,
+        discussion: "Directories are zipped first. Several directories, or directories mixed with files, become one bundle. Use --no-zip to send a folder as-is, or --smart to leave out dependencies, build output and secrets.",
         aliases: ["ad", "drop"]
     )
 

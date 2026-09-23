@@ -6,10 +6,7 @@ struct ScreenshotCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "screenshot",
         abstract: "Capture a screenshot and share it.",
-        discussion: """
-        Without a recipient the image is copied to the clipboard. Pass an email, phone number,
-        @alias, or 'airdrop' to send it directly. --selection and --window use the interactive picker.
-        """,
+        discussion: "Without a recipient the image is copied to the clipboard. Pass an email, phone number, @alias, or 'airdrop' to send it directly. --selection and --window use the interactive picker.",
         aliases: ["ss", "snap"]
     )
 

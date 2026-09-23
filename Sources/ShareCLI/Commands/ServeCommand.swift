@@ -6,12 +6,7 @@ struct ServeCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "serve",
         abstract: "Serve a file on your local network with a scannable QR code (no AirDrop needed).",
-        discussion: """
-        Starts a small HTTP server on this Mac and prints a link (and QR code) that any phone,
-        tablet or laptop on the same Wi-Fi can open to download the file. Directories and multiple
-        items are zipped first. The link uses a random token, nothing is uploaded anywhere, and the
-        server stops on Ctrl-C, after --timeout, or after the first download with --once.
-        """,
+        discussion: "Starts a small HTTP server on this Mac and prints a link (and QR code) that any phone, tablet or laptop on the same Wi-Fi can open to download the file. Directories and multiple items are zipped first. The link uses a random token, nothing is uploaded anywhere, and the server stops on Ctrl-C, after --timeout, or after the first download with --once.",
         aliases: ["link", "http"]
     )
 

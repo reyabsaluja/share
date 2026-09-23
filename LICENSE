@@ -1,20 +1,6 @@
-# Third-party notices
-
-## swift-argument-parser
-
-Command-line parsing, help output, shell completions and the man-page generator come from
-[swift-argument-parser](https://github.com/apple/swift-argument-parser) (Apache License 2.0),
-used as a Swift Package dependency.
-
-## airdrop-cli
-
-The AirDrop backend (`Sources/ShareCLI/Backends/AirDropBackend.swift`) is adapted from
-[airdrop-cli](https://github.com/vldmrkl/airdrop-cli) by Volodymyr Klymenko.
-
-```
 MIT License
 
-Copyright (c) 2020 Volodymyr Klymenko
+Copyright (c) 2026 Reyab Saluja
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -33,4 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-```

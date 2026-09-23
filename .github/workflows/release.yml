@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build universal binary and publish
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app || sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | tail -1)"
+      - name: Check version matches tag
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          CODE="$(sed -n 's/.*static let current = "\(.*\)".*/\1/p' Sources/ShareCLI/Core/Version.swift)"
+          if [ "$TAG" != "$CODE" ]; then echo "tag v$TAG does not match Version.current=$CODE"; exit 1; fi
+      - name: Test
+        run: swift test
+      - name: Build universal
+        run: swift build -c release --arch arm64 --arch x86_64
+      - name: Package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          BIN=".build/apple/Products/Release/share"
+          mkdir -p dist/share-$VERSION
+          cp "$BIN" dist/share-$VERSION/share
+          cp README.md LICENSE THIRD_PARTY_NOTICES.md CHANGELOG.md dist/share-$VERSION/
+          [ -f docs/man/share.1 ] && cp docs/man/share.1 dist/share-$VERSION/
+          tar -C dist -czf "share-$VERSION-macos.tar.gz" "share-$VERSION"
+          shasum -a 256 "share-$VERSION-macos.tar.gz" > "share-$VERSION-macos.tar.gz.sha256"
+          cat "share-$VERSION-macos.tar.gz.sha256"
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            share-*-macos.tar.gz
+            share-*-macos.tar.gz.sha256
+          generate_release_notes: true

@@ -6,11 +6,7 @@ struct QRCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "qr",
         abstract: "Show a QR code for text or a URL, right in the terminal.",
-        discussion: """
-        By default the code is printed in the terminal (scan it with your phone). Add --copy,
-        --output or --open to get a PNG instead. When stdout is not a terminal, the PNG is
-        copied to the clipboard.
-        """
+        discussion: "By default the code is printed in the terminal (scan it with your phone). Add --copy, --output or --open to get a PNG instead. When stdout is not a terminal, the PNG is copied to the clipboard."
     )
 
     @Argument(help: "Text or URL to encode. Reads stdin when omitted.")
