@@ -83,18 +83,25 @@ final class MessagesBackend: SharingBackend {
 
     // MARK: - Draft
 
-    private func draft(text: String, files: [URL]) throws {
-        var components = URLComponents()
-        components.scheme = "sms"
-        components.path = options.recipient
+    /// Builds `sms:<recipient>&body=<text>`, the form Messages.app understands for pre-filled drafts.
+    static func draftURL(recipient: String, text: String) -> String? {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "+@.-_")
+        guard let handle = recipient.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
+        var url = "sms:" + handle
         if !text.isEmpty {
-            components.queryItems = [URLQueryItem(name: "body", value: text)]
+            var bodyAllowed = CharacterSet.alphanumerics
+            bodyAllowed.insert(charactersIn: "-._~")
+            guard let body = text.addingPercentEncoding(withAllowedCharacters: bodyAllowed) else { return nil }
+            url += "&body=" + body
         }
-        guard let url = components.url else {
+        return url
+    }
+
+    private func draft(text: String, files: [URL]) throws {
+        guard let urlString = Self.draftURL(recipient: options.recipient, text: text) else {
             throw ShareError.usage("could not build a Messages URL for \(options.recipient)")
         }
-        // Messages expects "sms:+1555…&body=…", not "?body=".
-        let urlString = url.absoluteString.replacingOccurrences(of: "?body=", with: "&body=")
 
         if !files.isEmpty {
             let pasteboard = NSPasteboard.general

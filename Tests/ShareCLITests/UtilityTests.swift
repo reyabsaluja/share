@@ -60,6 +60,12 @@ extension ShareTests {
             #expect(MailBackend.composeBody("x", items: [], hasAttachments: true) == "x\n\n")
         }
 
+        @Test func messagesDraftURL() {
+            #expect(MessagesBackend.draftURL(recipient: "+14375550100", text: "") == "sms:+14375550100")
+            #expect(MessagesBackend.draftURL(recipient: "+14375550100", text: "hi there & bye") == "sms:+14375550100&body=hi%20there%20%26%20bye")
+            #expect(MessagesBackend.draftURL(recipient: "rey@icloud.com", text: "x") == "sms:rey@icloud.com&body=x")
+        }
+
         @Test func shortcutIndexedOutputs() {
             #expect(ShortcutsBackend.indexedOutput("/tmp/out.txt", index: 0) == "/tmp/out-1.txt")
             #expect(ShortcutsBackend.indexedOutput("/tmp/out", index: 2) == "/tmp/out-3")
