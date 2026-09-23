@@ -4,3 +4,6 @@ DerivedData/
 *.xcodeproj
 xcuserdata/
 .DS_Store
+dist/
+*.tar.gz
+*.sha256

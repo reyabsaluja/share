@@ -1,35 +1,62 @@
 import Foundation
 
+/// One recorded share action. Older entries may lack `argv`/`cwd`; `share again`
+/// falls back to reconstructing a command from the other fields in that case.
 struct HistoryEntry: Codable {
     let timestamp: Date
     let destination: String
     let recipient: String?
     let items: [String]
     let archivePath: String?
-}
+    var argv: [String]?
+    var cwd: String?
 
-enum History {
-    private static var fileURL: URL {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        return home.appendingPathComponent(".config/share/history.json")
+    init(timestamp: Date = Date(), destination: String, recipient: String?, items: [String], archivePath: String?, argv: [String]?, cwd: String?) {
+        self.timestamp = timestamp
+        self.destination = destination
+        self.recipient = recipient
+        self.items = items
+        self.archivePath = archivePath
+        self.argv = argv
+        self.cwd = cwd
     }
 
+    /// The command line that reproduces this entry.
+    var replayArguments: [String] {
+        if let argv = argv, !argv.isEmpty { return argv }
+        var args = [destination]
+        if let r = recipient { args.append(r) }
+        args.append(contentsOf: items)
+        return args
+    }
+}
+
+/// Append-only log of share actions, capped at `historyLimit` entries.
+enum History {
+    static let defaultLimit = 100
+
+    /// Set to false to suppress recording (used by `share again`, which delegates to a child process).
+    static var recordingEnabled = true
+
     static func record(destination: String, recipient: String?, items: [String], archivePath: String?) {
+        guard recordingEnabled else { return }
         var entries = load()
         let entry = HistoryEntry(
-            timestamp: Date(),
             destination: destination,
             recipient: recipient,
             items: items,
-            archivePath: archivePath
+            archivePath: archivePath,
+            argv: Array(CommandLine.arguments.dropFirst()),
+            cwd: FileManager.default.currentDirectoryPath
         )
         entries.append(entry)
-        if entries.count > 50 { entries = Array(entries.suffix(50)) }
+        let limit = max(1, ShareConfig.current.historyLimit ?? defaultLimit)
+        if entries.count > limit { entries = Array(entries.suffix(limit)) }
         save(entries)
     }
 
     static func load() -> [HistoryEntry] {
-        guard let data = try? Data(contentsOf: fileURL) else { return [] }
+        guard let data = try? Data(contentsOf: Paths.historyFile) else { return [] }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return (try? decoder.decode([HistoryEntry].self, from: data)) ?? []
@@ -40,16 +67,15 @@ enum History {
     }
 
     static func clear() {
-        try? FileManager.default.removeItem(at: fileURL)
+        try? FileManager.default.removeItem(at: Paths.historyFile)
     }
 
     private static func save(_ entries: [HistoryEntry]) {
-        let dir = fileURL.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? Paths.ensureConfigDirectory()
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = .prettyPrinted
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(entries) else { return }
-        try? data.write(to: fileURL, options: .atomic)
+        try? data.write(to: Paths.historyFile, options: .atomic)
     }
 }

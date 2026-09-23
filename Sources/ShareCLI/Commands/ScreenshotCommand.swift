@@ -1,143 +1,115 @@
-import ArgumentParser
 import AppKit
+import ArgumentParser
 import Foundation
 
 struct ScreenshotCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "screenshot",
-        abstract: "Take a screenshot and share it.",
+        abstract: "Capture a screenshot and share it.",
+        discussion: """
+        Without a recipient the image is copied to the clipboard. Pass an email, phone number,
+        @alias, or 'airdrop' to send it directly. --selection and --window use the interactive picker.
+        """,
         aliases: ["ss", "snap"]
     )
 
-    @Argument(help: "Recipient (email/phone/@alias). If omitted, copies to clipboard.")
+    @Argument(help: "Recipient (email, phone, @alias) or 'airdrop'. Omit to copy to the clipboard.", completion: .custom(Completions.aliasNames))
     var recipient: String?
 
-    @Flag(name: [.short, .long], help: "Capture a selection instead of full screen.")
+    @OptionGroup var output: OutputOptions
+
+    @Flag(name: [.short, .long], help: "Capture a selection instead of the full screen.")
     var selection = false
 
-    @Flag(name: [.short, .long], help: "Capture a specific window.")
+    @Flag(name: [.short, .long], help: "Capture a single window.")
     var window = false
 
-    @Option(name: .long, help: "Delay in seconds before capture.")
+    @Option(name: [.short, .long], help: "Seconds to wait before capturing.")
     var delay: Int?
 
-    @Flag(name: .long, help: "Don't delete the screenshot after sharing.")
+    @Option(name: .long, help: "Also save the screenshot to this path.")
+    var save: String?
+
+    @Flag(name: .long, help: "Keep the temporary screenshot file after sharing.")
     var keep = false
 
-    @Flag(name: .long, help: "Show what would happen.")
-    var dryRun = false
-
-    @Flag(name: .long, help: "Suppress non-error output.")
-    var quiet = false
-
-    @Flag(name: .long, help: "Send immediately (for messages).")
+    @Flag(name: .long, help: "Send immediately instead of opening a draft.")
     var send = false
 
     @Option(name: .long, help: "Email subject.")
     var subject: String?
 
     func run() throws {
-        Log.quiet = quiet
+        output.apply()
 
-        let tmpPath = Packager.tempDirectory()
-            .appendingPathComponent("share-screenshot-\(DateSlug.current()).png")
+        let stamp = DateSlug.current()
+        let tmpPath = Packager.tempDirectory().appendingPathComponent("screenshot-\(stamp).png")
 
-        if dryRun {
-            print("Would capture screenshot → \(tmpPath.lastPathComponent)")
-            if let r = recipient { print("Would share to: \(r)") }
-            else { print("Would copy to clipboard") }
+        let destinations: [Destination]? = try recipient.map { try Runner.destinations(for: $0) }
+
+        if output.dryRun {
+            let mode = selection ? "selection" : (window ? "window" : "full screen")
+            let target = destinations?.map { $0.recipient ?? $0.name }.joined(separator: ", ") ?? "clipboard"
+            Swift.print("Would capture \(mode) → \(tmpPath.lastPathComponent) and share to \(target)")
             return
         }
 
-        var args: [String] = []
-        if selection {
-            args.append("-i")
-        } else if window {
-            args.append("-iW")
-        }
-        if let d = delay {
-            args.append(contentsOf: ["-T", "\(d)"])
-        }
+        var args: [String] = ["-x"]  // no shutter sound; matches "quiet CLI" expectations
+        if selection { args.append("-i") } else if window { args.append("-iW") }
+        if let d = delay, d > 0 { args.append(contentsOf: ["-T", "\(d)"]) }
         args.append(tmpPath.path)
 
-        if !quiet { Log.info("Take your screenshot…") }
+        Log.info(selection || window ? "Select what to capture… (Esc to cancel)" : "Capturing…")
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-        process.arguments = args
-        try process.run()
-        process.waitUntilExit()
-
-        guard process.terminationStatus == 0,
-              FileManager.default.fileExists(atPath: tmpPath.path) else {
+        let result = Subprocess.run("/usr/sbin/screencapture", arguments: args)
+        guard result.status == 0, FileManager.default.fileExists(atPath: tmpPath.path) else {
+            if result.stderr.lowercased().contains("not permitted") || result.stderr.lowercased().contains("screen recording") {
+                throw ShareError.automationDenied(app: "Screen Recording")
+            }
             throw ShareError.userCancelled
         }
+        if !keep { TempFiles.register(tmpPath) }
 
-        if !quiet {
-            let size = HumanReadable.fileSizeAt(tmpPath.path) ?? "?"
-            Log.info("Captured (\(size))")
+        if let savePath = save {
+            let url = InputResolver.expandPath(savePath)
+            try? FileManager.default.removeItem(at: url)
+            try FileManager.default.copyItem(at: tmpPath, to: url)
+            Log.info("Saved → \(url.path)")
         }
 
-        guard let recipient = recipient else {
+        Log.info("Captured " + Color.dim("(\(HumanReadable.fileSizeAt(tmpPath.path) ?? "?"))"))
+        let item = ShareItem.file(tmpPath).toPrepared()
+
+        guard let destinations = destinations else {
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
-            let image = NSImage(contentsOf: tmpPath)
-            if let img = image {
-                pasteboard.writeObjects([img])
+            if let image = NSImage(contentsOf: tmpPath) {
+                pasteboard.writeObjects([image])
             }
-            if !quiet { Log.info(Color.green("Copied to clipboard ✓")) }
+            Log.success("Copied to clipboard ✓")
+            if output.json { Swift.print(JSONOutput.format(["ok": true, "destination": "clipboard", "path": tmpPath.path])) }
             if !keep { try? FileManager.default.removeItem(at: tmpPath) }
             return
         }
 
-        let resolvedRecipient = Aliases.resolve(recipient) ?? recipient
-
-        if let destination = SmartRouter.detect(resolvedRecipient) {
-            let items = try Packager.packageIfNeeded(
-                items: [.file(tmpPath)],
-                archiveName: nil,
-                keepTemp: keep,
-                verbose: false
-            )
-
+        for destination in destinations {
             switch destination {
             case .email(let address):
-                if !quiet { Log.info("Drafting email to \(address)…") }
-                let options = MailOptions(
-                    to: address,
-                    subject: subject ?? "Screenshot \(DateSlug.current())",
-                    send: false
-                )
-                let backend = MailBackend(options: options)
-                try backend.share(items)
-
-            case .messages(let phone):
-                if !quiet {
-                    if send { Log.info("Sending to \(phone)…") }
-                    else { Log.info("Opening Messages to \(phone)…") }
-                }
-                let options = MessagesOptions(recipient: phone, text: nil, send: send)
-                let backend = MessagesBackend(options: options)
-                try backend.share(items)
-
+                Log.info(send ? "Sending to \(address)…" : "Drafting to \(address)…")
+                let backend = MailBackend(options: MailOptions(to: address, subject: subject ?? "Screenshot \(stamp)", send: send))
+                try backend.share([item])
+                Runner.finish(destination: "screenshot", backend: backend.name, items: [item], recipient: address, sourceArguments: [], openedNativeUI: !send, json: output.json)
+            case .messages(let handle):
+                Log.info(send ? "Sending to \(handle)…" : "Opening Messages for \(handle)…")
+                let backend = MessagesBackend(options: MessagesOptions(recipient: handle, text: nil, send: send))
+                try backend.share([item])
+                Runner.finish(destination: "screenshot", backend: backend.name, items: [item], recipient: handle, sourceArguments: [], openedNativeUI: !send, json: output.json)
             case .airdrop:
-                if !quiet { Log.info("Opening AirDrop…") }
-                let app = NSApplication.shared
-                app.setActivationPolicy(.accessory)
+                Log.info("Opening AirDrop…")
                 let backend = AirDropBackend()
-                try backend.share(items)
+                try backend.share([item])
+                Runner.finish(destination: "screenshot", backend: backend.name, items: [item], recipient: nil, sourceArguments: [], openedNativeUI: true, json: output.json, successMessage: "Sent via AirDrop ✓")
             }
-        } else {
-            if !quiet { Log.info("Opening AirDrop…") }
-            let items = [PreparedShareItem(kind: .file, originalDescription: tmpPath.path, value: .file(tmpPath), packaged: false, temporary: true, sizeBytes: nil)]
-            let app = NSApplication.shared
-            app.setActivationPolicy(.accessory)
-            let backend = AirDropBackend()
-            try backend.share(items)
         }
-
-        if !keep { try? FileManager.default.removeItem(at: tmpPath) }
-
-        History.record(destination: "screenshot", recipient: resolvedRecipient, items: [], archivePath: tmpPath.path)
     }
 }

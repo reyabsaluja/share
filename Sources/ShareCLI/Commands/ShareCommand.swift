@@ -2,31 +2,34 @@ import AppKit
 import ArgumentParser
 import Foundation
 
-@main
 struct ShareCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "share",
-        abstract: "Share files from your Mac terminal via AirDrop, Mail, Messages, and Shortcuts.",
+        abstract: "Share files from your Mac terminal via AirDrop, Mail, Messages, Shortcuts, or a local link.",
         discussion: """
-        Smart routing: the first argument determines the destination.
+        Smart routing: with no subcommand, the arguments decide the destination.
 
-          share                        AirDrop current directory
-          share ./file.txt             AirDrop that file
-          share rey@email.com          Email current directory
-          share +14375551234 hello     Compose a message
-          share @rey README.md         Use alias (@name)
-          share airdrop/email/msg ...  Explicit destination
+          share                         AirDrop the current directory (zipped)
+          share ./build.zip README.md   AirDrop those files
+          share rey@example.com         Email the current directory as a draft
+          share +14375550100 "hi"       Compose a Message
+          share @rey ./report.pdf       Use an alias; groups fan out to everyone
+          share airdrop|email|msg ...   Explicit destination with every option
 
-        Set up aliases:  share alias rey rey@example.com
-        Preview first:   share preview .
-        Repeat last:     share again
+        Setup:    share init, share alias rey rey@example.com, share config set smart true
+        Inspect:  share preview ., share doctor, share history
+        Repeat:   share again
+
+        Safety defaults: email and messages create drafts unless --send is given,
+        nothing is uploaded anywhere, and folders are scanned for secrets first.
         """,
-        version: "0.1.0",
+        version: Version.current,
         subcommands: [
             AirDropCommand.self,
             EmailCommand.self,
             MessagesCommand.self,
             ShortcutCommand.self,
+            ServeCommand.self,
             ZipCommand.self,
             CopyCommand.self,
             TextCommand.self,
@@ -39,6 +42,7 @@ struct ShareCommand: ParsableCommand {
             AgainCommand.self,
             HistoryCommand.self,
             AliasCommand.self,
+            ConfigCommand.self,
             CompletionsCommand.self,
             InitCommand.self,
             CleanCommand.self,
@@ -49,295 +53,135 @@ struct ShareCommand: ParsableCommand {
     )
 }
 
+/// Handles `share <anything>` when the first argument is not a subcommand.
 struct DefaultCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "_default",
         shouldDisplay: false
     )
 
-    @Argument(parsing: .allUnrecognized)
+    @Argument(parsing: .allUnrecognized, help: "Recipient and/or items.")
     var remaining: [String] = []
 
-    @Flag(name: .long, help: "Show what would happen without sharing.")
-    var dryRun = false
-
-    @Flag(name: .long, help: "Output result as JSON.")
-    var json = false
-
-    @Flag(name: .long, help: "Print verbose output.")
-    var verbose = false
-
-    @Flag(name: .long, help: "Suppress non-error output.")
-    var quiet = false
+    @OptionGroup var output: OutputOptions
+    @OptionGroup var packaging: PackagingOptions
 
     @Option(name: [.short, .long], help: "Email subject.")
     var subject: String?
 
-    @Option(name: [.short, .long], help: "Archive name.")
-    var name: String?
+    @Option(name: [.short, .long], help: "Email body or message text.")
+    var body: String?
 
-    @Flag(name: .long, help: "Send immediately (email and messages default to draft).")
+    @Option(name: .long, help: "Sender address for email.")
+    var from: String?
+
+    @Option(name: .long, help: "CC recipients for email (comma-separated).")
+    var cc: String?
+
+    @Option(name: .long, help: "BCC recipients for email (comma-separated).")
+    var bcc: String?
+
+    @Flag(name: .long, help: "Send immediately instead of leaving a draft (email and messages).")
     var send = false
 
-    @Flag(name: .long, help: "Don't zip directories.")
-    var noZip = false
-
-    @Flag(name: .long, help: "Skip confirmation prompts.")
-    var yes = false
+    @Flag(name: .long, help: "Use the SMS account instead of iMessage.")
+    var sms = false
 
     mutating func run() throws {
-        Log.verbose = verbose
-        Log.quiet = quiet
+        output.apply()
 
-        let args = remaining.filter { !$0.hasPrefix("-") || InputResolver.existsAsFile($0) }
+        // Anything that still looks like a flag here is one we do not know.
+        if let unknown = remaining.first(where: { $0.hasPrefix("-") && $0.count > 1 && !InputResolver.existsAsFile($0) }) {
+            throw ShareError.usage("unknown option '\(unknown)'", hint: "run 'share --help' or 'share <command> --help' to see the available options")
+        }
 
-        if args.isEmpty {
-            try runAirDrop(items: [])
+        let (recipient, items) = Self.splitRecipient(remaining)
+
+        guard let recipient = recipient else {
+            try runAirDrop(items: items)
             return
         }
 
-        let first = args[0]
-        let rest = Array(args.dropFirst())
-
-        if InputResolver.existsAsFile(first) {
-            try runAirDrop(items: args)
-        } else if let destination = SmartRouter.detect(first) {
-            switch destination {
-            case .email(let address):
-                try runEmail(to: address, items: rest)
-            case .messages(let recipient):
-                try runMessages(to: recipient, items: rest)
-            case .airdrop:
-                try runAirDrop(items: args)
-            }
-        } else {
-            try runAirDrop(items: args)
+        let destinations = try Runner.destinations(for: recipient, allowBareAlias: true)
+        if destinations.count > 1 {
+            try runBatch(destinations: destinations, recipientArgument: recipient, items: items)
+            return
         }
+        switch destinations[0] {
+        case .email(let address): try runEmail(to: address, items: items)
+        case .messages(let handle): try runMessages(to: handle, items: items)
+        case .airdrop: try runAirDrop(items: items)
+        }
+    }
+
+    /// Finds the first argument that names a recipient (and is not an existing path).
+    static func splitRecipient(_ args: [String]) -> (String?, [String]) {
+        for (index, arg) in args.enumerated() where !InputResolver.existsAsFile(arg) && !InputResolver.isURL(arg) && arg != "-" {
+            let looksLikeRecipient = SmartRouter.detect(arg, allowBareAlias: true) != nil
+                || arg.contains(",") && SmartRouter.recipients(from: arg, allowBareAlias: true).allSatisfy { SmartRouter.detect($0) != nil }
+            if looksLikeRecipient {
+                var rest = args
+                rest.remove(at: index)
+                return (arg, rest)
+            }
+        }
+        return (nil, args)
+    }
+
+    // MARK: - Destinations
+
+    /// Flags to forward to the concrete subcommand.
+    private func forwardedFlags(packaging includePackaging: Bool) -> [String] {
+        var flags: [String] = []
+        if output.dryRun { flags.append("--dry-run") }
+        if output.json { flags.append("--json") }
+        if output.verbose { flags.append("--verbose") }
+        if output.quiet { flags.append("--quiet") }
+        if output.yes { flags.append("--yes") }
+        if output.color { flags.append("--color") }
+        if output.noColor { flags.append("--no-color") }
+        if includePackaging {
+            if let name = packaging.name { flags.append(contentsOf: ["--name", name]) }
+            if packaging.smart { flags.append("--smart") }
+            if packaging.noZip { flags.append("--no-zip") }
+            for pattern in packaging.exclude { flags.append(contentsOf: ["--exclude", pattern]) }
+        }
+        return flags
+    }
+
+    private func forward<C: ParsableCommand>(_ type: C.Type, flags: [String], positionals: [String]) throws {
+        var command = try type.parse(flags + ["--"] + positionals)
+        try command.run()
     }
 
     private func runAirDrop(items: [String]) throws {
-        let startTime = CFAbsoluteTimeGetCurrent()
-        let resolved = try InputResolver.resolve(items)
-
-        if !dryRun {
-            for item in resolved {
-                if case .directory(let url) = item {
-                    guard SecretsDetector.warnIfNeeded(directory: url, quiet: quiet, autoConfirm: yes) else {
-                        throw ShareError.userCancelled
-                    }
-                }
-            }
-        }
-
-        let useSmart = ShareConfig.load().defaultSmart == true
-        let effectiveItems: [ShareItem]
-        if useSmart && !noZip {
-            effectiveItems = try resolved.map { item -> ShareItem in
-                if case .directory(let url) = item {
-                    let cleaned = try SmartExclude.stage(directory: url, verbose: verbose)
-                    return .directory(cleaned)
-                }
-                return item
-            }
-        } else {
-            effectiveItems = resolved
-        }
-
-        let prepared: [PreparedShareItem]
-        if noZip {
-            prepared = effectiveItems.map { $0.toPrepared() }
-        } else {
-            prepared = try Packager.packageIfNeeded(items: effectiveItems, archiveName: name, keepTemp: false, verbose: verbose)
-        }
-
-        if verbose {
-            let elapsed = CFAbsoluteTimeGetCurrent() - startTime
-            Log.debug("prepared in \(String(format: "%.2fs", elapsed))")
-        }
-
-        if dryRun {
-            if json {
-                print(JSONOutput.success(destination: "airdrop", backend: "NSSharingService.sendViaAirDrop", items: prepared, openedNativeUI: false))
-            } else {
-                for item in prepared {
-                    if item.packaged, case .file(let url) = item.value {
-                        let size = HumanReadable.fileSizeAt(url.path) ?? ""
-                        print("Would package → \(url.lastPathComponent) (\(size))")
-                    } else {
-                        print("Would AirDrop: \(item.displayName)")
-                    }
-                }
-            }
-            return
-        }
-
-        if !quiet {
-            for item in prepared {
-                if item.packaged, case .file(let url) = item.value {
-                    let size = HumanReadable.fileSizeAt(url.path) ?? ""
-                    Log.info("Packaged → \(url.lastPathComponent) " + Color.dim("(\(size))"))
-                }
-            }
-            Log.info("Opening AirDrop…")
-        }
-
-        let app = NSApplication.shared
-        app.setActivationPolicy(.accessory)
-        let backend = AirDropBackend()
-        try backend.share(prepared)
-
-        let itemPaths = items.isEmpty ? ["."] : items
-        History.record(destination: "airdrop", recipient: nil, items: itemPaths, archivePath: prepared.first(where: \.packaged).flatMap { if case .file(let u) = $0.value { return u.path }; return nil })
-
-        if json {
-            print(JSONOutput.success(destination: "airdrop", backend: backend.name, items: prepared, openedNativeUI: true))
-        }
+        try forward(AirDropCommand.self, flags: forwardedFlags(packaging: true), positionals: items)
     }
 
     private func runEmail(to address: String, items: [String]) throws {
-        let startTime = CFAbsoluteTimeGetCurrent()
-        let stdinText = StdinReader.readIfPiped()
-        let resolved = try InputResolver.resolve(items)
-
-        if !dryRun {
-            for item in resolved {
-                if case .directory(let url) = item {
-                    guard SecretsDetector.warnIfNeeded(directory: url, quiet: quiet, autoConfirm: yes) else {
-                        throw ShareError.userCancelled
-                    }
-                }
-            }
-        }
-
-        let prepared = try Packager.packageIfNeeded(items: resolved, archiveName: name, keepTemp: false, verbose: verbose)
-
-        if dryRun {
-            if json {
-                print(JSONOutput.success(destination: "email", backend: "Mail.app (AppleScript)", items: prepared, openedNativeUI: false))
-            } else {
-                print("Would email \(address)")
-                for item in prepared {
-                    print("  attach: \(item.displayName)")
-                }
-            }
-            return
-        }
-
-        if !yes {
-            guard SizeWarning.check(items: prepared, destination: "email", quiet: quiet) else {
-                throw ShareError.userCancelled
-            }
-        }
-
-        if !quiet {
-            Log.info("Drafting email to \(address)…")
-            for item in prepared where item.packaged {
-                if case .file(let url) = item.value {
-                    let size = HumanReadable.fileSizeAt(url.path) ?? ""
-                    Log.info("  Attached → \(url.lastPathComponent) " + Color.dim("(\(size))"))
-                }
-            }
-        }
-
-        if verbose {
-            let elapsed = CFAbsoluteTimeGetCurrent() - startTime
-            Log.debug("prepared in \(String(format: "%.2fs", elapsed))")
-        }
-
-        let effectiveSubject = subject ?? GitContext.smartSubject()
-
-        let options = MailOptions(
-            to: address,
-            subject: effectiveSubject,
-            body: stdinText,
-            send: send
-        )
-        let backend = MailBackend(options: options)
-        try backend.share(prepared)
-
-        History.record(destination: "email", recipient: address, items: items.isEmpty ? ["."] : items, archivePath: nil)
-
-        if json {
-            print(JSONOutput.success(destination: "email", backend: backend.name, items: prepared, openedNativeUI: !send))
-        }
+        var flags = forwardedFlags(packaging: true)
+        if let subject = subject { flags.append(contentsOf: ["--subject", subject]) }
+        if let body = body { flags.append(contentsOf: ["--body", body]) }
+        if let from = from { flags.append(contentsOf: ["--from", from]) }
+        if let cc = cc { flags.append(contentsOf: ["--cc", cc]) }
+        if let bcc = bcc { flags.append(contentsOf: ["--bcc", bcc]) }
+        if send { flags.append("--send") }
+        try forward(EmailCommand.self, flags: flags, positionals: [address] + items)
     }
 
-    private func runMessages(to recipient: String, items: [String]) throws {
-        let shouldSend = send
+    private func runMessages(to handle: String, items: [String]) throws {
+        var flags = forwardedFlags(packaging: true)
+        if let body = body { flags.append(contentsOf: ["--text", body]) }
+        if send { flags.append("--send") }
+        if sms { flags.append("--sms") }
+        try forward(MessagesCommand.self, flags: flags, positionals: [handle] + items)
+    }
 
-        var textParts: [String] = []
-        var fileParts: [String] = []
-
-        for item in items {
-            if InputResolver.isURL(item) {
-                textParts.append(item)
-            } else if InputResolver.existsAsFile(item) {
-                fileParts.append(item)
-            } else {
-                textParts.append(item)
-            }
-        }
-
-        let stdinText = StdinReader.readIfPiped()
-        let messageText: String
-        if !textParts.isEmpty {
-            messageText = textParts.joined(separator: " ")
-        } else if let piped = stdinText {
-            messageText = piped
-        } else {
-            messageText = ""
-        }
-
-        let resolved: [ShareItem]
-        if fileParts.isEmpty && messageText.isEmpty {
-            resolved = try InputResolver.resolve([])
-        } else if fileParts.isEmpty {
-            resolved = [.text(messageText)]
-        } else {
-            resolved = try InputResolver.resolve(fileParts)
-        }
-
-        let prepared = try Packager.packageIfNeeded(items: resolved, archiveName: name, keepTemp: false, verbose: verbose)
-
-        if dryRun {
-            if json {
-                print(JSONOutput.success(destination: "messages", backend: "Messages.app (AppleScript)", items: prepared, openedNativeUI: false))
-            } else {
-                print("Would message \(recipient)")
-                if !messageText.isEmpty {
-                    print("  text: \(messageText.prefix(80))")
-                }
-                for item in prepared where item.kind == .file {
-                    print("  file: \(item.displayName)")
-                }
-                print("  send: \(shouldSend ? "yes" : "draft")")
-            }
-            return
-        }
-
-        if !quiet {
-            if shouldSend {
-                Log.info("Sending to \(recipient)…")
-            } else {
-                Log.info("Opening Messages to \(recipient)…")
-            }
-        }
-
-        let options = MessagesOptions(
-            recipient: recipient,
-            text: messageText.isEmpty ? nil : messageText,
-            send: shouldSend
-        )
-        let backend = MessagesBackend(options: options)
-        try backend.share(prepared)
-
-        History.record(destination: "messages", recipient: recipient, items: items, archivePath: nil)
-        if shouldSend {
-            Notifier.send(title: "share", message: "Sent to \(recipient)")
-        }
-
-        if json {
-            print(JSONOutput.success(destination: "messages", backend: backend.name, items: prepared, openedNativeUI: !shouldSend))
-        }
+    private func runBatch(destinations: [Destination], recipientArgument: String, items: [String]) throws {
+        var flags = forwardedFlags(packaging: true)
+        if let subject = subject { flags.append(contentsOf: ["--subject", subject]) }
+        if let body = body { flags.append(contentsOf: ["--body", body]) }
+        if send { flags.append("--send") }
+        try forward(BatchCommand.self, flags: flags, positionals: [recipientArgument] + items)
     }
 }

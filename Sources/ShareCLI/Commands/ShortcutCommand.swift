@@ -4,89 +4,67 @@ import Foundation
 struct ShortcutCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "shortcut",
-        abstract: "Run a macOS Shortcut with file input.",
+        abstract: "Run a macOS Shortcut with the items as input.",
+        discussion: "Files are passed with the shortcut's file input; URLs and text are piped on stdin.",
         aliases: ["sc"]
     )
 
     @Argument(help: "Name of the Shortcut to run.")
     var shortcutName: String?
 
-    @Argument(help: "Files or directories to pass as input. Defaults to current directory.")
+    @Argument(help: "Files, directories, URLs or text. Defaults to the current directory.")
     var items: [String] = []
 
-    @Flag(name: .long, help: "List available Shortcuts.")
+    @OptionGroup var output: OutputOptions
+    @OptionGroup var packaging: PackagingOptions
+
+    @Flag(name: [.short, .long], help: "List available Shortcuts.")
     var list = false
 
-    @Option(name: .long, help: "Output path for Shortcut result.")
-    var output: String?
-
-    @Option(name: .long, help: "Custom archive name (without extension).")
-    var name: String?
-
-    @Flag(name: .long, help: "Keep temporary files.")
-    var keepTemp = false
-
-    @Flag(name: .long, help: "Show what would happen.")
-    var dryRun = false
-
-    @Flag(name: .long, help: "Print verbose output.")
-    var verbose = false
-
-    @Flag(name: .long, help: "Suppress non-error output.")
-    var quiet = false
-
-    @Flag(name: .long, help: "Output result as JSON.")
-    var json = false
+    @Option(name: [.short, .long], help: "Write the Shortcut's output to this path.")
+    var outputPath: String?
 
     func run() throws {
-        Log.verbose = verbose
-        Log.quiet = quiet
+        output.apply()
 
         if list {
             let shortcuts = try ShortcutsBackend.listShortcuts()
-            if json {
-                let data = try JSONSerialization.data(withJSONObject: shortcuts, options: .prettyPrinted)
-                print(String(data: data, encoding: .utf8) ?? "[]")
+            if output.json {
+                print(JSONOutput.format(shortcuts))
             } else {
-                for shortcut in shortcuts {
-                    print(shortcut)
-                }
+                shortcuts.forEach { print($0) }
             }
             return
         }
 
         guard let scName = shortcutName else {
-            throw ShareError.usage("Provide a shortcut name or use --list")
+            throw ShareError.usage("provide a shortcut name, or --list to see them")
         }
 
         let resolved = try InputResolver.resolve(items)
-        let prepared = try Packager.packageIfNeeded(items: resolved, archiveName: name, keepTemp: keepTemp, verbose: verbose)
+        let options = packaging.prepareOptions(destination: "shortcut", output: output)
+        let prepared = try Preparer.prepare(resolved, options: options)
 
-        if dryRun {
-            if json {
-                print(JSONOutput.success(destination: "shortcut", backend: "Shortcuts.app", items: prepared, openedNativeUI: false))
-            } else {
-                print("Would run shortcut: \(scName)")
-                for item in prepared {
-                    if case .file(let url) = item.value {
-                        print("  input: \(url.path)")
-                    }
-                }
-            }
+        if output.dryRun {
+            Runner.printDryRun(destination: "run shortcut", recipient: scName, items: prepared, json: output.json)
             return
         }
 
-        if !quiet {
-            Log.info("Running shortcut \"\(scName)\"…")
-        }
+        Runner.announcePackaged(prepared)
+        Log.info("Running shortcut \"\(scName)\"…")
 
-        let backend = ShortcutsBackend(shortcutName: scName, outputPath: output)
+        let backend = ShortcutsBackend(shortcutName: scName, outputPath: outputPath)
         try backend.share(prepared)
 
-        History.record(destination: "shortcut", recipient: scName, items: items.isEmpty ? ["."] : items, archivePath: nil)
-
-        if json {
-            print(JSONOutput.success(destination: "shortcut", backend: backend.name, items: prepared, openedNativeUI: false))
-        }
+        Runner.finish(
+            destination: "shortcut",
+            backend: backend.name,
+            items: prepared,
+            recipient: scName,
+            sourceArguments: items,
+            openedNativeUI: false,
+            json: output.json,
+            successMessage: "Shortcut \"\(scName)\" finished ✓"
+        )
     }
 }

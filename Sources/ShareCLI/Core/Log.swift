@@ -1,29 +1,43 @@
 import Foundation
 
+/// All human-facing status output goes to stderr so stdout stays clean for
+/// machine-readable results (`--json`, paths, generated scripts).
 enum Log {
     static var verbose = false
     static var quiet = false
 
+    /// Progress and status lines. Suppressed by `--quiet`.
     static func info(_ message: String) {
         guard !quiet else { return }
-        fputs("\(message)\n", stderr)
+        write(message)
     }
 
+    /// Extra detail. Only shown with `--verbose`.
     static func debug(_ message: String) {
         guard verbose else { return }
-        fputs(Color.dim(message) + "\n", stderr)
+        write(Color.dim(message))
     }
 
+    /// Non-fatal problems the user should know about. Always shown.
+    static func warn(_ message: String) {
+        write(Color.yellow("warning: \(message)"))
+    }
+
+    /// Fatal problems. Always shown.
     static func error(_ message: String) {
-        fputs(Color.red("share: \(message)") + "\n", stderr)
+        write(Color.red("share: \(message)"))
     }
 
     static func hint(_ message: String) {
-        fputs(Color.dim("hint: \(message)") + "\n", stderr)
+        write(Color.dim("hint: \(message)"))
     }
 
     static func success(_ message: String) {
         guard !quiet else { return }
-        fputs(Color.green(message) + "\n", stderr)
+        write(Color.green(message))
+    }
+
+    private static func write(_ line: String) {
+        FileHandle.standardError.write(Data((line + "\n").utf8))
     }
 }

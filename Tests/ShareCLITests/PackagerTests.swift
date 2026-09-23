@@ -1,79 +1,100 @@
-import XCTest
+import Foundation
+import Testing
 @testable import share
 
-final class PackagerTests: XCTestCase {
-    func testZipSingleDirectory() throws {
-        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("share-pkg-test-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-        let testFile = tmpDir.appendingPathComponent("hello.txt")
-        try "hello world".write(to: testFile, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: tmpDir) }
+extension ShareTests {
+    @Suite struct PackagerTests {
+        @Test func singleDirectoryZipUnpacksToNamedFolder() throws {
+            let sandbox = try Sandbox()
+            let dir = try sandbox.directory("project")
+            try sandbox.file("project/hello.txt", "hello world")
 
-        let items: [ShareItem] = [.directory(tmpDir)]
-        let zipURL = try Packager.zipOnly(items: items, archiveName: "test-archive", outputPath: nil, verbose: false)
-        defer { try? FileManager.default.removeItem(at: zipURL) }
-
-        XCTAssertTrue(FileManager.default.fileExists(atPath: zipURL.path))
-        XCTAssertTrue(zipURL.lastPathComponent.hasPrefix("test-archive-"))
-        XCTAssertTrue(zipURL.lastPathComponent.hasSuffix(".zip"))
-    }
-
-    func testZipWithOutputPath() throws {
-        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("share-pkg-out-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-        let testFile = tmpDir.appendingPathComponent("data.txt")
-        try "data".write(to: testFile, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: tmpDir) }
-
-        let outputPath = FileManager.default.temporaryDirectory.appendingPathComponent("output-\(UUID().uuidString).zip").path
-        defer { try? FileManager.default.removeItem(atPath: outputPath) }
-
-        let items: [ShareItem] = [.directory(tmpDir)]
-        let zipURL = try Packager.zipOnly(items: items, archiveName: nil, outputPath: outputPath, verbose: false)
-
-        XCTAssertEqual(zipURL.path, outputPath)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: outputPath))
-    }
-
-    func testPackageIfNeededWithFiles() throws {
-        let tmpFile = FileManager.default.temporaryDirectory.appendingPathComponent("share-pkg-file-\(UUID().uuidString).txt")
-        try "content".write(to: tmpFile, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: tmpFile) }
-
-        let items: [ShareItem] = [.file(tmpFile)]
-        let prepared = try Packager.packageIfNeeded(items: items, archiveName: nil, keepTemp: false, verbose: false)
-
-        XCTAssertEqual(prepared.count, 1)
-        XCTAssertFalse(prepared[0].packaged)
-        XCTAssertEqual(prepared[0].kind, .file)
-    }
-
-    func testPackageIfNeededWithDirectory() throws {
-        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("share-pkg-dir-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-        let testFile = tmpDir.appendingPathComponent("test.txt")
-        try "test".write(to: testFile, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: tmpDir) }
-
-        let items: [ShareItem] = [.directory(tmpDir)]
-        let prepared = try Packager.packageIfNeeded(items: items, archiveName: nil, keepTemp: false, verbose: false)
-
-        XCTAssertEqual(prepared.count, 1)
-        XCTAssertTrue(prepared[0].packaged)
-        XCTAssertTrue(prepared[0].temporary)
-
-        if case .file(let url) = prepared[0].value {
-            XCTAssertTrue(url.path.hasSuffix(".zip"))
-            try? FileManager.default.removeItem(at: url)
+            let zip = try Packager.zipOnly(items: [.directory(dir)], archiveName: "test-archive", outputPath: nil, verbose: false)
+            #expect(zip.lastPathComponent.hasPrefix("test-archive-"))
+            #expect(zip.lastPathComponent.hasSuffix(".zip"))
+            #expect(zip.path.hasPrefix(sandbox.temp.path))
+            let entries = Sandbox.zipEntries(zip)
+            #expect(entries.contains("project/hello.txt"))
+            #expect(!entries.contains { $0.contains("__MACOSX") || $0.contains("/._") })
         }
-    }
 
-    func testURLsAreNotPackaged() throws {
-        let items: [ShareItem] = [.url(URL(string: "https://apple.com")!)]
-        let prepared = try Packager.packageIfNeeded(items: items, archiveName: nil, keepTemp: false, verbose: false)
+        @Test func bundleUnpacksToArchiveNameNotUUID() throws {
+            let sandbox = try Sandbox()
+            let a = try sandbox.directory("a")
+            let b = try sandbox.directory("b")
+            try sandbox.file("a/1.txt")
+            try sandbox.file("b/2.txt")
+            let loose = try sandbox.file("notes.md", "# notes")
 
-        XCTAssertEqual(prepared.count, 1)
-        XCTAssertFalse(prepared[0].packaged)
-        XCTAssertEqual(prepared[0].kind, .url)
+            let prepared = try Packager.packageIfNeeded(items: [.directory(a), .directory(b), .file(loose)], archiveName: nil, verbose: false)
+            #expect(prepared.count == 1)
+            #expect(prepared[0].packaged && prepared[0].temporary)
+            let entries = Sandbox.zipEntries(prepared[0].fileURL!)
+            #expect(entries.contains("share-bundle/a/1.txt"))
+            #expect(entries.contains("share-bundle/b/2.txt"))
+            #expect(entries.contains("share-bundle/notes.md"))
+        }
+
+        @Test func duplicateNamesInBundleAreDisambiguated() throws {
+            let sandbox = try Sandbox()
+            let one = try sandbox.file("x/report.txt", "1")
+            let two = try sandbox.file("y/report.txt", "2")
+            let dir = try sandbox.directory("z")
+            let prepared = try Packager.packageIfNeeded(items: [.file(one), .file(two), .directory(dir)], archiveName: "pack", verbose: false)
+            let entries = Sandbox.zipEntries(prepared[0].fileURL!)
+            #expect(entries.contains("pack/report.txt"))
+            #expect(entries.contains("pack/report-2.txt"))
+        }
+
+        @Test func filesUrlsAndTextPassThrough() throws {
+            let sandbox = try Sandbox()
+            let file = try sandbox.file("a.txt", "content")
+            let prepared = try Packager.packageIfNeeded(items: [.file(file), .url(URL(string: "https://apple.com")!), .text("hi")], archiveName: nil, verbose: false)
+            #expect(prepared.count == 3)
+            #expect(prepared.allSatisfy { !$0.packaged })
+            #expect(prepared[0].sizeBytes == 7)
+            #expect(prepared[1].kind == .url)
+            #expect(prepared[2].kind == .text)
+        }
+
+        @Test func outputPathMayBeDirectoryAndRefusesClobber() throws {
+            let sandbox = try Sandbox()
+            let dir = try sandbox.directory("src")
+            try sandbox.file("src/a.txt")
+            let outDir = try sandbox.directory("out")
+
+            let zip = try Packager.zipOnly(items: [.directory(dir)], archiveName: nil, outputPath: outDir.path, verbose: false)
+            #expect(zip.path == outDir.appendingPathComponent("src.zip").path)
+            #expect(FileManager.default.fileExists(atPath: zip.path))
+
+            #expect(throws: ShareError.self) {
+                _ = try Packager.zipOnly(items: [.directory(dir)], archiveName: nil, outputPath: outDir.path, verbose: false)
+            }
+            let again = try Packager.zipOnly(items: [.directory(dir)], archiveName: nil, outputPath: outDir.path, overwrite: true, verbose: false)
+            #expect(again.path == zip.path)
+
+            let noExt = try Packager.zipOnly(items: [.directory(dir)], archiveName: nil, outputPath: outDir.appendingPathComponent("custom").path, verbose: false)
+            #expect(noExt.lastPathComponent == "custom.zip")
+        }
+
+        @Test func defaultArchiveNames() throws {
+            let sandbox = try Sandbox()
+            let file = try sandbox.file("report.pdf")
+            let dir = try sandbox.directory("proj")
+            #expect(Packager.defaultArchiveName(for: [.file(file)]) == "report")
+            #expect(Packager.defaultArchiveName(for: [.directory(dir)]) == "proj")
+            #expect(Packager.defaultArchiveName(for: [.file(file), .directory(dir)]) == Packager.bundleName)
+        }
+
+        @Test func zipOnlyRejectsNonFiles() {
+            #expect(throws: ShareError.self) {
+                _ = try Packager.zipOnly(items: [.url(URL(string: "https://x.com")!)], archiveName: nil, outputPath: nil, verbose: false)
+            }
+        }
+
+        @Test func dateSlugFormat() {
+            let slug = DateSlug.current()
+            #expect(slug.range(of: #"^\d{4}-\d{2}-\d{2}-\d{6}$"#, options: .regularExpression) != nil)
+        }
     }
 }

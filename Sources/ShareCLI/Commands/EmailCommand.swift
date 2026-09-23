@@ -4,127 +4,128 @@ import Foundation
 struct EmailCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "email",
-        abstract: "Create a Mail.app draft with attachments.",
+        abstract: "Create a Mail.app draft (or send) with the items attached.",
+        discussion: """
+        URLs and text become part of the body; files and zipped directories are attached.
+        Piped stdin is appended to the body. Use --send to send without reviewing.
+        """,
         aliases: ["mail", "em"]
     )
 
-    @Argument(help: "Recipient email address.")
+    @Argument(help: "Recipient: email address, @alias, or comma-separated list.", completion: .custom(Completions.aliasNames))
     var to: String
 
-    @Argument(help: "Files, directories, or URLs to attach. Defaults to current directory.")
+    @Argument(help: "Files, directories, URLs, or - for stdin. Defaults to the current directory.")
     var items: [String] = []
 
-    @Option(name: [.short, .long], help: "Subject line.")
+    @OptionGroup var output: OutputOptions
+    @OptionGroup var packaging: PackagingOptions
+
+    @Option(name: [.short, .long], help: "Subject line. Default: \"Shared: <repo> (<branch>)\" or the configured template.")
     var subject: String?
 
-    @Option(name: [.short, .long], help: "Body text.")
+    @Option(name: [.short, .long], help: "Body text. Use - to read it from stdin.")
     var body: String?
 
-    @Option(name: .long, help: "Sender email.")
+    @Option(name: .long, help: "Read the body from a file.")
+    var bodyFile: String?
+
+    @Option(name: .long, help: "Sender address (default: config 'from').")
     var from: String?
 
-    @Option(name: .long, help: "CC recipient.")
+    @Option(name: .long, help: "CC recipients, comma-separated.")
     var cc: String?
 
-    @Option(name: .long, help: "BCC recipient.")
+    @Option(name: .long, help: "BCC recipients, comma-separated.")
     var bcc: String?
 
-    @Option(name: [.short, .long], help: "Archive name.")
-    var name: String?
-
-    @Flag(name: .long, help: "Exclude .git, node_modules, .DS_Store, build caches.")
-    var smart = false
-
-    @Flag(name: .long, help: "Send immediately (default is draft).")
+    @Flag(name: .long, help: "Send immediately instead of opening a draft.")
     var send = false
 
-    @Flag(name: .long, help: "Show what would happen.")
-    var dryRun = false
-
-    @Flag(name: .long, help: "Print verbose output.")
-    var verbose = false
-
-    @Flag(name: .long, help: "Suppress non-error output.")
-    var quiet = false
-
-    @Flag(name: .long, help: "Output JSON.")
-    var json = false
-
     func run() throws {
-        Log.verbose = verbose
-        Log.quiet = quiet
+        output.apply()
 
-        let resolvedTo = Aliases.resolve(to) ?? to
-
-        let stdinText = StdinReader.readIfPiped()
-        let effectiveBody: String?
-        if let piped = stdinText {
-            effectiveBody = body.map { $0 + "\n\n" + piped } ?? piped
-        } else {
-            effectiveBody = body
+        let recipients = SmartRouter.recipients(from: to)
+        guard !recipients.isEmpty else { throw ShareError.usage("no recipient given") }
+        for r in recipients where !SmartRouter.looksLikeEmail(r) {
+            throw ShareError.usage("'\(r)' is not an email address", hint: "use an address like name@example.com, or an @alias that points to one")
         }
+        let toList = recipients.joined(separator: ", ")
 
+        let effectiveBody = try Self.resolveBody(body: body, bodyFile: bodyFile)
         let resolved = try InputResolver.resolve(items)
+        let options = packaging.prepareOptions(destination: "email", output: output)
+        let prepared = try Preparer.prepare(resolved, options: options)
 
-        let useSmart = smart || ShareConfig.load().defaultSmart == true
-        let effectiveItems: [ShareItem]
-        if useSmart {
-            effectiveItems = try resolved.map { item -> ShareItem in
-                if case .directory(let url) = item {
-                    let cleaned = try SmartExclude.stage(directory: url, verbose: verbose)
-                    return .directory(cleaned)
-                }
-                return item
-            }
-        } else {
-            effectiveItems = resolved
-        }
+        let effectiveSubject = subject ?? defaultSubject(prepared)
 
-        let prepared = try Packager.packageIfNeeded(items: effectiveItems, archiveName: name, keepTemp: false, verbose: verbose)
-
-        if dryRun {
-            if json {
-                print(JSONOutput.success(destination: "email", backend: "Mail.app (AppleScript)", items: prepared, openedNativeUI: false))
-            } else {
-                print("Would email \(resolvedTo)")
-                if let s = subject { print("  subject: \(s)") }
-                for item in prepared {
-                    let size = item.sizeBytes.map { HumanReadable.fileSize($0) } ?? ""
-                    print("  attach:  \(item.displayName) " + Color.dim("(\(size))"))
-                }
-                if send { print("  action:  send") } else { print("  action:  draft") }
-            }
+        if output.dryRun {
+            var details = [("subject", effectiveSubject), ("action", send ? "send" : "draft")]
+            if let f = from ?? ShareConfig.current.from { details.append(("from", f)) }
+            if let c = cc { details.append(("cc", c)) }
+            if let b = bcc { details.append(("bcc", b)) }
+            if let body = effectiveBody { details.append(("body", body.count > 60 ? String(body.prefix(60)) + "…" : body)) }
+            Runner.printDryRun(destination: "email", recipient: toList, items: prepared, json: output.json, details: details)
             return
         }
 
-        guard SizeWarning.check(items: prepared, destination: "email", quiet: quiet) else {
-            throw ShareError.userCancelled
-        }
+        Runner.announcePackaged(prepared)
+        Log.info(send ? "Sending to \(toList)…" : "Drafting to \(toList)…")
 
-        if !quiet {
-            if send {
-                Log.info("Sending to \(resolvedTo)…")
-            } else {
-                Log.info("Drafting to \(resolvedTo)…")
-            }
-        }
-
-        let options = MailOptions(
-            to: resolvedTo,
+        let backend = MailBackend(options: MailOptions(
+            to: toList,
             from: from,
             cc: cc,
             bcc: bcc,
-            subject: subject,
+            subject: effectiveSubject,
             body: effectiveBody,
             send: send
-        )
-        let backend = MailBackend(options: options)
+        ))
         try backend.share(prepared)
 
-        History.record(destination: "email", recipient: resolvedTo, items: items.isEmpty ? ["."] : items, archivePath: nil)
+        Runner.finish(
+            destination: "email",
+            backend: backend.name,
+            items: prepared,
+            recipient: toList,
+            sourceArguments: items,
+            openedNativeUI: !send,
+            json: output.json,
+            successMessage: send ? "Sent to \(toList) ✓" : "Draft opened in Mail ✓"
+        )
+    }
 
-        if json {
-            print(JSONOutput.success(destination: "email", backend: backend.name, items: prepared, openedNativeUI: !send))
+    private func defaultSubject(_ prepared: [PreparedShareItem]) -> String {
+        let files = prepared.filter { $0.kind == .file }
+        if files.count == 1, let item = files.first {
+            let name = item.packaged ? (item.originalDescription as NSString).lastPathComponent : item.displayName
+            return GitContext.smartSubject(itemName: name)
         }
+        return GitContext.smartSubject()
+    }
+
+    /// Combines --body, --body-file and piped stdin into one body.
+    static func resolveBody(body: String?, bodyFile: String?) throws -> String? {
+        var parts: [String] = []
+        if let body = body {
+            if body == "-" {
+                guard let piped = StdinReader.readAll() else { throw ShareError.usage("--body - was given but stdin is empty") }
+                parts.append(piped)
+            } else {
+                parts.append(body)
+            }
+        }
+        if let path = bodyFile {
+            let url = InputResolver.expandPath(path)
+            guard let content = try? String(contentsOf: url, encoding: .utf8) else {
+                throw ShareError.inputNotFound(path)
+            }
+            parts.append(content)
+        }
+        if body != "-", let piped = StdinReader.readIfPiped() {
+            parts.append(piped)
+        }
+        let joined = parts.joined(separator: "\n\n").trimmingCharacters(in: .newlines)
+        return joined.isEmpty ? nil : joined
     }
 }

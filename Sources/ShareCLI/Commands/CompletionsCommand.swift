@@ -4,92 +4,56 @@ import Foundation
 struct CompletionsCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "completions",
-        abstract: "Generate or install shell completions."
+        abstract: "Print or install shell completions (zsh, bash, fish)."
     )
 
-    @Argument(help: "Shell: zsh, bash, or fish.")
-    var shell: String = "zsh"
+    @Argument(help: "Shell: zsh, bash, or fish. Defaults to $SHELL.")
+    var shell: String?
 
-    @Flag(name: .long, help: "Install completions to the appropriate directory.")
+    @Flag(name: .long, help: "Install into the shell's completion directory.")
     var install = false
 
     func run() throws {
-        switch shell.lowercased() {
+        let name = (shell ?? Self.detectShell()).lowercased()
+        guard let completionShell = CompletionShell(rawValue: name) else {
+            throw ShareError.usage("unsupported shell '\(name)'", hint: "use zsh, bash, or fish")
+        }
+        let script = ShareCommand.completionScript(for: completionShell)
+
+        guard install else {
+            print(script)
+            return
+        }
+
+        let home = Paths.home
+        let file: URL
+        var instructions: [String] = []
+        switch name {
         case "zsh":
-            if install {
-                try installZsh()
-            } else {
-                let completions = try generateCompletions(for: "zsh")
-                print(completions)
-            }
+            let dir = home.appendingPathComponent(".zsh/completions")
+            file = dir.appendingPathComponent("_share")
+            instructions = [
+                "Add to ~/.zshrc if it is not there already:",
+                "  fpath=(~/.zsh/completions $fpath)",
+                "  autoload -Uz compinit && compinit",
+            ]
         case "bash":
-            if install {
-                try installBash()
-            } else {
-                let completions = try generateCompletions(for: "bash")
-                print(completions)
-            }
-        case "fish":
-            if install {
-                try installFish()
-            } else {
-                let completions = try generateCompletions(for: "fish")
-                print(completions)
-            }
+            let dir = home.appendingPathComponent(".local/share/bash-completion/completions")
+            file = dir.appendingPathComponent("share")
+            instructions = ["Requires the bash-completion package (brew install bash-completion@2)."]
         default:
-            throw ShareError.usage("Unsupported shell: \(shell). Use zsh, bash, or fish.")
+            file = home.appendingPathComponent(".config/fish/completions/share.fish")
         }
+
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try script.write(to: file, atomically: true, encoding: .utf8)
+        print("Installed \(name) completions → \(file.path)")
+        instructions.forEach { print($0) }
+        print("Restart your shell to activate them.")
     }
 
-    private func generateCompletions(for shell: String) throws -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
-        process.arguments = ["--generate-completion-script", shell]
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-
-        try process.run()
-        process.waitUntilExit()
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        guard let output = String(data: data, encoding: .utf8), !output.isEmpty else {
-            throw ShareError.packagingFailed("Failed to generate completions")
-        }
-        return output
-    }
-
-    private func installZsh() throws {
-        let completions = try generateCompletions(for: "zsh")
-        let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".zsh/completions")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let file = dir.appendingPathComponent("_share")
-        try completions.write(to: file, atomically: true, encoding: .utf8)
-        print("Installed to \(file.path)")
-        print("Add to your .zshrc if not already there:")
-        print("  fpath=(~/.zsh/completions $fpath)")
-        print("  autoload -Uz compinit && compinit")
-    }
-
-    private func installBash() throws {
-        let completions = try generateCompletions(for: "bash")
-        let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".local/share/bash-completion/completions")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let file = dir.appendingPathComponent("share")
-        try completions.write(to: file, atomically: true, encoding: .utf8)
-        print("Installed to \(file.path)")
-    }
-
-    private func installFish() throws {
-        let completions = try generateCompletions(for: "fish")
-        let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/fish/completions")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let file = dir.appendingPathComponent("share.fish")
-        try completions.write(to: file, atomically: true, encoding: .utf8)
-        print("Installed to \(file.path)")
+    static func detectShell() -> String {
+        let shellPath = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        return URL(fileURLWithPath: shellPath).lastPathComponent
     }
 }

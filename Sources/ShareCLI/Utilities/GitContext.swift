@@ -1,74 +1,148 @@
 import Foundation
 
+/// Lightweight git queries used for naming archives and subjects. Every call is
+/// best-effort: when git is missing or the directory is not a repository, the
+/// functions return nil and callers fall back to plain names.
 enum GitContext {
-    static func repoName() -> String? {
-        let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let gitDir = url.appendingPathComponent(".git")
-        guard FileManager.default.fileExists(atPath: gitDir.path) else { return nil }
-        return url.lastPathComponent
+    /// The repository root containing `directory`, if any.
+    static func repoRoot(for directory: URL? = nil) -> URL? {
+        let dir = directory ?? cwd
+        guard let output = run(in: dir, "rev-parse", "--show-toplevel"), !output.isEmpty else { return nil }
+        return URL(fileURLWithPath: output, isDirectory: true).standardized
     }
 
-    static func branchName() -> String? {
-        return run("git", "rev-parse", "--abbrev-ref", "HEAD")
+    /// True when `directory` is itself the root of a git repository.
+    static func isRepoRoot(_ directory: URL) -> Bool {
+        return FileManager.default.fileExists(atPath: directory.appendingPathComponent(".git").path)
     }
 
-    static func shortHash() -> String? {
-        return run("git", "rev-parse", "--short", "HEAD")
+    /// The name of the repository the current directory belongs to.
+    static func repoName(for directory: URL? = nil) -> String? {
+        return repoRoot(for: directory)?.lastPathComponent
     }
 
-    static func isDirty() -> Bool {
-        guard let output = run("git", "status", "--porcelain") else { return false }
+    static func branchName(for directory: URL? = nil) -> String? {
+        guard let branch = run(in: directory ?? cwd, "rev-parse", "--abbrev-ref", "HEAD"), !branch.isEmpty else { return nil }
+        return branch
+    }
+
+    static func shortHash(for directory: URL? = nil) -> String? {
+        return run(in: directory ?? cwd, "rev-parse", "--short", "HEAD")
+    }
+
+    static func isDirty(for directory: URL? = nil) -> Bool {
+        guard let output = run(in: directory ?? cwd, "status", "--porcelain") else { return false }
         return !output.isEmpty
     }
 
-    static func smartArchiveName() -> String {
-        let base = repoName() ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath).lastPathComponent
-        if let branch = branchName(), branch != "main" && branch != "master" && branch != "HEAD" {
-            return "\(base)-\(sanitize(branch))"
-        }
-        return base
+    /// Files git considers part of the project: tracked plus untracked-but-not-ignored.
+    /// Returns nil when `directory` is not a repository root or git is unavailable.
+    static func projectFiles(in directory: URL) -> [String]? {
+        guard isRepoRoot(directory) else { return nil }
+        guard let output = runRaw(in: directory, "ls-files", "-z", "--cached", "--others", "--exclude-standard") else { return nil }
+        return output.split(separator: "\0").map(String.init).filter { !$0.isEmpty }
     }
 
-    static func smartSubject(for action: String = "Shared") -> String {
-        let repo = repoName() ?? "files"
-        if let branch = branchName(), branch != "main" && branch != "master" {
+    /// Archive name for a directory: `repo` on main/master, `repo-branch` otherwise.
+    static func archiveName(for directory: URL) -> String {
+        let base = directory.lastPathComponent
+        guard isRepoRoot(directory), let branch = branchName(for: directory), !isDefaultBranch(branch) else {
+            return base
+        }
+        return "\(base)-\(sanitize(branch))"
+    }
+
+    /// Legacy helper kept for callers that operate on the current directory.
+    static func smartArchiveName() -> String {
+        return archiveName(for: cwd)
+    }
+
+    /// Subject line: "Shared: repo (branch)" or from the configured template.
+    static func smartSubject(for action: String = "Shared", itemName: String? = nil) -> String {
+        if let template = ShareConfig.current.subjectTemplate, !template.isEmpty {
+            return SubjectTemplate.render(template, itemName: itemName)
+        }
+        let repo = repoName() ?? itemName ?? "files"
+        if let branch = branchName(), !isDefaultBranch(branch) {
             return "\(action): \(repo) (\(branch))"
         }
         return "\(action): \(repo)"
     }
 
-    static func diff() -> String? {
-        return run("git", "--no-pager", "diff")
+    static func diff(range: String? = nil, staged: Bool = false, paths: [String] = []) -> String? {
+        var args = ["--no-pager", "diff"]
+        if staged { args.append("--staged") }
+        if let range = range { args.append(range) }
+        if !paths.isEmpty { args.append("--"); args.append(contentsOf: paths) }
+        return run(in: cwd, args)
     }
 
     static func diffStaged() -> String? {
-        return run("git", "--no-pager", "diff", "--staged")
+        return diff(staged: true)
     }
 
-    private static func run(_ args: String...) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = args
-        process.currentDirectoryURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+    static var isAvailable: Bool {
+        return run(in: cwd, "--version") != nil
+    }
 
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
+    static func isDefaultBranch(_ branch: String) -> Bool {
+        return branch == "main" || branch == "master" || branch == "HEAD"
+    }
 
-        do {
-            try process.run()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else { return nil }
-            return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        } catch {
-            return nil
+    static func sanitize(_ branch: String) -> String {
+        let cleaned = branch.map { ch -> Character in
+            if ch.isLetter || ch.isNumber || ch == "-" || ch == "_" || ch == "." { return ch }
+            return "-"
         }
+        return String(cleaned)
     }
 
-    private static func sanitize(_ branch: String) -> String {
-        return branch
-            .replacingOccurrences(of: "/", with: "-")
-            .replacingOccurrences(of: " ", with: "-")
+    // MARK: - Process helpers
+
+    private static var cwd: URL { URL(fileURLWithPath: FileManager.default.currentDirectoryPath) }
+
+    private static func run(in directory: URL, _ args: String...) -> String? {
+        return run(in: directory, args)
+    }
+
+    private static func run(in directory: URL, _ args: [String]) -> String? {
+        return runRaw(in: directory, args)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func runRaw(in directory: URL, _ args: String...) -> String? {
+        return runRaw(in: directory, args)
+    }
+
+    private static func runRaw(in directory: URL, _ args: [String]) -> String? {
+        let result = Subprocess.run("/usr/bin/env", arguments: ["git"] + args, currentDirectory: directory)
+        guard result.status == 0 else { return nil }
+        return result.stdout
+    }
+}
+
+/// Renders `{repo}`, `{branch}`, `{name}`, `{date}`, `{time}`, `{user}`, `{host}` placeholders.
+enum SubjectTemplate {
+    static func render(_ template: String, itemName: String?, date: Date = Date()) -> String {
+        let repo = GitContext.repoName() ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath).lastPathComponent
+        let branch = GitContext.branchName() ?? ""
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd"
+        let timeFormatter = DateFormatter()
+        timeFormatter.dateFormat = "HH:mm"
+        let values: [String: String] = [
+            "repo": repo,
+            "branch": branch,
+            "name": itemName ?? repo,
+            "date": dateFormatter.string(from: date),
+            "time": timeFormatter.string(from: date),
+            "user": NSUserName(),
+            "host": Host.current().localizedName ?? ProcessInfo.processInfo.hostName,
+        ]
+        var result = template
+        for (key, value) in values {
+            result = result.replacingOccurrences(of: "{\(key)}", with: value)
+        }
+        // Tidy the common "repo ()" case when there is no branch.
+        return result.replacingOccurrences(of: " ()", with: "").trimmingCharacters(in: .whitespaces)
     }
 }

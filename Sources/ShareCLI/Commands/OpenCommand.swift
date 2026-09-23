@@ -4,39 +4,45 @@ import Foundation
 struct OpenCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "open",
-        abstract: "Reveal file in Finder or open in default app.",
+        abstract: "Open items in their default app, or reveal them in Finder.",
         aliases: ["reveal", "finder"]
     )
 
-    @Argument(help: "Files or directories to open. Defaults to current directory.")
+    @Argument(help: "Files, directories, or URLs. Defaults to the current directory.")
     var items: [String] = []
+
+    @OptionGroup var output: OutputOptions
 
     @Flag(name: [.short, .long], help: "Reveal in Finder instead of opening.")
     var reveal = false
 
-    @Flag(name: .long, help: "Suppress non-error output.")
-    var quiet = false
+    @Option(name: [.short, .long], help: "Open with a specific application, e.g. --app 'Visual Studio Code'.")
+    var app: String?
 
     func run() throws {
-        Log.quiet = quiet
+        output.apply()
         let resolved = try InputResolver.resolve(items)
 
         for item in resolved {
+            var arguments: [String] = []
             switch item {
             case .file(let url), .directory(let url):
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-                process.arguments = reveal ? ["-R", url.path] : [url.path]
-                try process.run()
-                process.waitUntilExit()
+                if reveal { arguments.append("-R") }
+                if let app = app { arguments.append(contentsOf: ["-a", app]) }
+                arguments.append(url.path)
             case .url(let url):
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-                process.arguments = [url.absoluteString]
-                try process.run()
-                process.waitUntilExit()
+                if let app = app { arguments.append(contentsOf: ["-a", app]) }
+                arguments.append(url.absoluteString)
             case .text:
-                break
+                continue
+            }
+            if output.dryRun {
+                print("Would run: open \(arguments.joined(separator: " "))")
+                continue
+            }
+            let result = Subprocess.run("/usr/bin/open", arguments: arguments)
+            guard result.status == 0 else {
+                throw ShareError.sharingFailed("open failed: \(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
             }
         }
     }

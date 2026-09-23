@@ -4,96 +4,81 @@ import Foundation
 struct PreviewCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "preview",
-        abstract: "Preview what will be shared without sending.",
+        abstract: "Show what would be shared: sizes, project type, exclusions, and sensitive files.",
         aliases: ["ls", "info"]
     )
 
-    @Argument(help: "Files, directories, or URLs. Defaults to current directory.")
+    @Argument(help: "Files, directories, or URLs. Defaults to the current directory.")
     var items: [String] = []
+
+    @OptionGroup var output: OutputOptions
 
     @Flag(name: .long, help: "Show what --smart would exclude.")
     var smart = false
 
-    @Flag(name: .long, help: "Output JSON.")
-    var json = false
+    @Option(name: .long, help: "Extra ignore pattern to evaluate. Repeatable.")
+    var exclude: [String] = []
+
+    @Flag(name: .long, help: "List every excluded path instead of the first few.")
+    var all = false
 
     func run() throws {
+        output.apply()
         let resolved = try InputResolver.resolve(items)
+        let useSmart = smart || ShareConfig.current.smart == true
 
-        if json {
-            var result: [[String: Any]] = []
-            for item in resolved {
-                var dict: [String: Any] = ["type": itemType(item)]
-                switch item {
-                case .file(let url):
-                    dict["path"] = url.path
-                    dict["name"] = url.lastPathComponent
-                    dict["size"] = HumanReadable.fileSizeAt(url.path) ?? "unknown"
-                case .directory(let url):
-                    dict["path"] = url.path
-                    dict["name"] = url.lastPathComponent
-                    dict["size"] = directorySize(url)
-                    dict["project"] = "\(ProjectDetector.detect(at: url))"
-                case .url(let url):
-                    dict["url"] = url.absoluteString
-                case .text(let text):
-                    dict["text"] = String(text.prefix(100))
-                    dict["length"] = text.count
-                }
-                result.append(dict)
-            }
-            let data = try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys])
-            print(String(data: data, encoding: .utf8) ?? "[]")
+        if output.json {
+            print(JSONOutput.format(resolved.map { describe($0, smart: useSmart) }))
             return
         }
 
-        let cwd = FileManager.default.currentDirectoryPath
-        let repoName = GitContext.repoName()
-        let branch = GitContext.branchName()
-        let projectType = ProjectDetector.detect()
-
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         print("")
-        if let name = repoName {
-            var header = "  " + Color.bold(name)
-            if let b = branch, b != "main" && b != "master" { header += " " + Color.cyan("(\(b))") }
-            if projectType != .unknown { header += " " + Color.dim("[\(projectType)]") }
-            print(header)
-        } else {
-            print("  " + Color.bold(URL(fileURLWithPath: cwd).lastPathComponent))
-        }
+        var header = "  " + Color.bold(GitContext.repoName() ?? cwd.lastPathComponent)
+        if let branch = GitContext.branchName(), !GitContext.isDefaultBranch(branch) { header += " " + Color.cyan("(\(branch))") }
+        let projectType = ProjectDetector.detect()
+        if projectType != .unknown { header += " " + Color.dim("[\(projectType.rawValue)]") }
+        if GitContext.repoRoot() != nil && GitContext.isDirty() { header += " " + Color.yellow("● uncommitted changes") }
+        print(header)
         print("")
 
         for item in resolved {
             switch item {
             case .file(let url):
-                let size = HumanReadable.fileSizeAt(url.path) ?? "?"
-                print("  " + Color.green("●") + " \(url.lastPathComponent)  " + Color.dim("(\(size))"))
+                print("  " + Color.green("●") + " \(url.lastPathComponent)  " + Color.dim("(\(HumanReadable.fileSizeAt(url.path) ?? "?"))"))
+                if let reason = SecretsDetector.isSensitive(url.lastPathComponent) ? "sensitive file name" : SecretsDetector.scanContents(of: url) {
+                    print("     " + Color.yellow("⚠ \(reason)"))
+                }
+
             case .directory(let url):
-                let size = directorySize(url)
-                let fileCount = countFiles(url)
-                print("  " + Color.cyan("●") + " \(url.lastPathComponent)/  " + Color.dim("(\(size), \(fileCount) files)"))
+                let rules = useSmart ? ExcludeRules.smart(for: url, extra: exclude) : (exclude.isEmpty ? nil : ExcludeRules.explicit(for: url, extra: exclude))
+                let raw = DirectoryStats.measure(url, fileLimit: 100_000)
+                print("  " + Color.cyan("●") + " \(url.lastPathComponent)/  " + Color.dim("(\(raw.summary))"))
 
-                if smart {
-                    let excludes = ProjectDetector.excludes(for: projectType)
-                    let wouldExclude = findExcludable(in: url, patterns: excludes)
-                    if !wouldExclude.isEmpty {
-                        print("     " + Color.dim("--smart would exclude:"))
-                        for name in wouldExclude.prefix(8) {
-                            print("       " + Color.red("✕") + " " + Color.dim(name))
-                        }
-                        if wouldExclude.count > 8 {
-                            print("       " + Color.dim("… and \(wouldExclude.count - 8) more"))
-                        }
+                if let rules = rules {
+                    let filtered = DirectoryStats.measure(url, rules: rules, fileLimit: 100_000)
+                    let plan = SmartExclude.plan(directory: url, rules: rules)
+                    print("     " + Color.dim("with \(useSmart ? "--smart" : "--exclude"): \(filtered.summary)"))
+                    if !plan.excluded.isEmpty {
+                        print("     " + Color.dim("excluded:"))
+                        let shown = all ? plan.excluded : Array(plan.excluded.prefix(8))
+                        for name in shown { print("       " + Color.red("✕") + " " + Color.dim(name)) }
+                        if plan.excluded.count > shown.count { print("       " + Color.dim("… and \(plan.excluded.count - shown.count) more (use --all)")) }
+                    }
+                    if GitContext.isRepoRoot(url) && (ShareConfig.current.gitignore ?? true) {
+                        print("     " + Color.dim(".gitignore is honored (git ls-files)"))
                     }
                 }
 
-                let secrets = SecretsDetector.scan(directory: url)
+                let secrets = SecretsDetector.scan(directory: url, rules: rules)
                 if !secrets.isEmpty {
-                    print("     " + Color.yellow("⚠ sensitive files:"))
-                    for s in secrets.prefix(5) {
-                        print("       " + Color.yellow("!") + " \(s)")
-                    }
+                    print("     " + Color.yellow("⚠ sensitive files that would be shared:"))
+                    let shown = all ? secrets : Array(secrets.prefix(5))
+                    for s in shown { print("       " + Color.yellow("!") + " \(s.path)  " + Color.dim("(\(s.reason))")) }
+                    if secrets.count > shown.count { print("       " + Color.dim("… and \(secrets.count - shown.count) more")) }
                 }
+                let archive = GitContext.archiveName(for: url)
+                print("     " + Color.dim("archive: \(archive)-<timestamp>.zip"))
 
             case .url(let url):
                 print("  " + Color.cyan("●") + " \(url.absoluteString)")
@@ -103,63 +88,38 @@ struct PreviewCommand: ParsableCommand {
         }
 
         print("")
-        if resolved.contains(where: { if case .directory = $0 { return true }; return false }) {
-            let archiveName = GitContext.smartArchiveName()
-            print("  " + Color.dim("Archive: \(archiveName)-<timestamp>.zip"))
-            if !smart {
-                Log.hint("use --smart to exclude build artifacts")
-            }
+        if !useSmart && resolved.contains(where: \.isDirectory) {
+            Log.hint("add --smart to see what would be excluded, or 'share config set smart true' to make it the default")
         }
-        print("")
     }
 
-    private func itemType(_ item: ShareItem) -> String {
+    private func describe(_ item: ShareItem, smart: Bool) -> [String: Any] {
         switch item {
-        case .file: return "file"
-        case .directory: return "directory"
-        case .url: return "url"
-        case .text: return "text"
+        case .file(let url):
+            var dict: [String: Any] = ["type": "file", "path": url.path, "name": url.lastPathComponent]
+            if let size = Packager.fileSize(url) { dict["sizeBytes"] = size }
+            if SecretsDetector.isSensitive(url.lastPathComponent) { dict["sensitive"] = "sensitive file name" }
+            else if let reason = SecretsDetector.scanContents(of: url) { dict["sensitive"] = reason }
+            return dict
+        case .directory(let url):
+            let rules = smart ? ExcludeRules.smart(for: url, extra: exclude) : nil
+            let stats = DirectoryStats.measure(url, rules: rules, fileLimit: 100_000)
+            var dict: [String: Any] = [
+                "type": "directory",
+                "path": url.path,
+                "name": url.lastPathComponent,
+                "fileCount": stats.fileCount,
+                "sizeBytes": stats.totalBytes,
+                "project": ProjectDetector.detect(at: url).rawValue,
+                "archiveName": GitContext.archiveName(for: url),
+                "sensitive": SecretsDetector.scan(directory: url, rules: rules).map { ["path": $0.path, "reason": $0.reason] },
+            ]
+            if smart { dict["excluded"] = SmartExclude.plan(directory: url, rules: rules).excluded }
+            return dict
+        case .url(let url):
+            return ["type": "url", "url": url.absoluteString]
+        case .text(let text):
+            return ["type": "text", "text": String(text.prefix(100)), "length": text.count]
         }
-    }
-
-    private func directorySize(_ url: URL) -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/du")
-        process.arguments = ["-sh", url.path]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        try? process.run()
-        process.waitUntilExit()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let output = String(data: data, encoding: .utf8) ?? ""
-        return output.split(separator: "\t").first.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? "?"
-    }
-
-    private func countFiles(_ url: URL) -> Int {
-        guard let enumerator = FileManager.default.enumerator(
-            at: url,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else { return 0 }
-
-        var count = 0
-        for case let fileURL as URL in enumerator {
-            if (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
-                count += 1
-            }
-        }
-        return count
-    }
-
-    private func findExcludable(in directory: URL, patterns: Set<String>) -> [String] {
-        var found: [String] = []
-        guard let contents = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else { return [] }
-        for name in contents {
-            if patterns.contains(name) {
-                found.append(name)
-            }
-        }
-        return found.sorted()
     }
 }

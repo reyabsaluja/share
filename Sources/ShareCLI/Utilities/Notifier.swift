@@ -1,5 +1,6 @@
 import Foundation
 
+/// Posts a macOS user notification via osascript. Failures are silent by design.
 enum Notifier {
     static func send(title: String, message: String) {
         let script = """
@@ -7,12 +8,12 @@ enum Notifier {
             display notification (item 2 of argv) with title (item 1 of argv)
         end run
         """
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", script, title, message]
-        process.standardError = FileHandle.nullDevice
-        process.standardOutput = FileHandle.nullDevice
-        try? process.run()
-        process.waitUntilExit()
+        Subprocess.run("/usr/bin/osascript", arguments: ["-e", script, title, message])
+    }
+
+    /// Notify only when the user opted in via config.
+    static func sendIfEnabled(title: String = "share", message: String) {
+        guard ShareConfig.current.notify == true else { return }
+        send(title: title, message: message)
     }
 }

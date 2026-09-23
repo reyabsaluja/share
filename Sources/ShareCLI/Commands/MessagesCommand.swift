@@ -4,121 +4,111 @@ import Foundation
 struct MessagesCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "messages",
-        abstract: "Share via Messages.",
+        abstract: "Share via Messages (iMessage or SMS).",
+        discussion: """
+        Arguments that are not existing files become the message text. Without --send, the
+        conversation opens with the text pre-filled and any files on the clipboard (⌘V to attach).
+        With --send, text and files go out immediately.
+        """,
         aliases: ["message", "msg", "im", "sms"]
     )
 
-    @Argument(help: "Recipient phone number or email.")
+    @Argument(help: "Recipient: phone number, iMessage email, or @alias.", completion: .custom(Completions.aliasNames))
     var recipient: String
 
-    @Argument(help: "Text, files, or URLs. Non-file args become the message body.")
+    @Argument(help: "Text, files, directories, or URLs.")
     var items: [String] = []
 
-    @Option(name: [.short, .long], help: "Message text (alternative to positional).")
+    @OptionGroup var output: OutputOptions
+    @OptionGroup var packaging: PackagingOptions
+
+    @Option(name: [.short, .long], help: "Message text (alternative to positional words). Use - for stdin.")
     var text: String?
 
-    @Option(name: [.short, .long], help: "Archive name.")
-    var name: String?
-
-    @Flag(name: .long, help: "Send immediately instead of composing a draft.")
+    @Flag(name: .long, help: "Send immediately instead of opening a draft.")
     var send = false
 
-    @Flag(name: .long, help: "Show what would happen.")
-    var dryRun = false
-
-    @Flag(name: .long, help: "Print verbose output.")
-    var verbose = false
-
-    @Flag(name: .long, help: "Suppress non-error output.")
-    var quiet = false
-
-    @Flag(name: .long, help: "Output JSON.")
-    var json = false
+    @Flag(name: .long, help: "Use the SMS account (iPhone relay) instead of iMessage.")
+    var sms = false
 
     func run() throws {
-        Log.verbose = verbose
-        Log.quiet = quiet
+        output.apply()
 
         let resolvedRecipient = Aliases.resolve(recipient) ?? recipient
-        let shouldSend = send
+        guard let destination = SmartRouter.detect(resolvedRecipient), let handle = destination.recipient else {
+            throw ShareError.usage("'\(recipient)' is not a phone number, email address or @alias")
+        }
 
-        var textParts: [String] = []
-        var fileParts: [String] = []
-
+        var words: [String] = []
+        var paths: [String] = []
         for item in items {
-            if InputResolver.isURL(item) {
-                textParts.append(item)
-            } else if InputResolver.existsAsFile(item) {
-                fileParts.append(item)
+            if InputResolver.existsAsFile(item) || item == "-" {
+                paths.append(item)
+            } else if InputResolver.isURL(item) {
+                words.append(item)
             } else {
-                textParts.append(item)
+                words.append(item)
             }
         }
 
-        let stdinText = StdinReader.readIfPiped()
-
-        let messageText: String
+        var messageText: String
         if let explicit = text {
-            messageText = explicit
-        } else if !textParts.isEmpty {
-            messageText = textParts.joined(separator: " ")
-        } else if let piped = stdinText {
+            if explicit == "-" {
+                guard let piped = StdinReader.readAll() else { throw ShareError.usage("--text - was given but stdin is empty") }
+                messageText = piped
+            } else {
+                messageText = explicit
+            }
+        } else if !words.isEmpty {
+            messageText = words.joined(separator: " ")
+        } else if let piped = StdinReader.readIfPiped() {
             messageText = piped
         } else {
             messageText = ""
         }
+        messageText = messageText.trimmingCharacters(in: .newlines)
 
         let resolved: [ShareItem]
-        if fileParts.isEmpty && messageText.isEmpty {
+        if paths.isEmpty && messageText.isEmpty {
             resolved = try InputResolver.resolve([])
-        } else if fileParts.isEmpty {
-            resolved = [.text(messageText)]
+        } else if paths.isEmpty {
+            resolved = []
         } else {
-            resolved = try InputResolver.resolve(fileParts)
+            resolved = try InputResolver.resolve(paths)
         }
 
-        let prepared = try Packager.packageIfNeeded(items: resolved, archiveName: name, keepTemp: false, verbose: verbose)
+        let options = packaging.prepareOptions(destination: "messages", output: output)
+        let prepared = try Preparer.prepare(resolved, options: options)
 
-        if dryRun {
-            if json {
-                print(JSONOutput.success(destination: "messages", backend: "Messages.app (AppleScript)", items: prepared, openedNativeUI: false))
-            } else {
-                print("Would message \(resolvedRecipient)")
-                if !messageText.isEmpty {
-                    print("  text: \(messageText.prefix(80))")
-                }
-                for item in prepared where item.kind == .file {
-                    print("  file: \(item.displayName)")
-                }
-                print("  send: \(shouldSend ? "yes" : "draft")")
-            }
+        if output.dryRun {
+            var details: [(String, String)] = []
+            if !messageText.isEmpty { details.append(("text", String(messageText.prefix(80)))) }
+            details.append(("action", send ? "send" : "draft"))
+            details.append(("service", (sms || ShareConfig.current.sms == true) ? "SMS" : "iMessage"))
+            Runner.printDryRun(destination: "messages", recipient: handle, items: prepared, json: output.json, details: details)
             return
         }
 
-        if !quiet {
-            if shouldSend {
-                Log.info("Sending to \(resolvedRecipient)…")
-            } else {
-                Log.info("Opening Messages to \(resolvedRecipient)…")
-            }
-        }
+        Runner.announcePackaged(prepared)
+        Log.info(send ? "Sending to \(handle)…" : "Opening Messages for \(handle)…")
 
-        let options = MessagesOptions(
-            recipient: resolvedRecipient,
+        let backend = MessagesBackend(options: MessagesOptions(
+            recipient: handle,
             text: messageText.isEmpty ? nil : messageText,
-            send: shouldSend
-        )
-        let backend = MessagesBackend(options: options)
+            send: send,
+            sms: sms
+        ))
         try backend.share(prepared)
 
-        History.record(destination: "messages", recipient: resolvedRecipient, items: items, archivePath: nil)
-
-        if shouldSend {
-            Notifier.send(title: "share", message: "Sent to \(resolvedRecipient)")
-        }
-
-        if json {
-            print(JSONOutput.success(destination: "messages", backend: backend.name, items: prepared, openedNativeUI: !shouldSend))
-        }
+        Runner.finish(
+            destination: "messages",
+            backend: backend.name,
+            items: prepared,
+            recipient: handle,
+            sourceArguments: items,
+            openedNativeUI: !send,
+            json: output.json,
+            successMessage: send ? "Sent to \(handle) ✓" : nil
+        )
     }
 }

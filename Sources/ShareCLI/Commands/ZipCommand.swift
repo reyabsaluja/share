@@ -1,95 +1,80 @@
-import ArgumentParser
 import AppKit
+import ArgumentParser
 import Foundation
 
 struct ZipCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "zip",
-        abstract: "Package files/folders into a zip archive."
+        abstract: "Package files and folders into a zip archive.",
+        discussion: """
+        Without --output the archive goes to the scratch directory and its path is copied
+        to the clipboard. --output may be a file path or an existing directory.
+        """
     )
 
-    @Argument(help: "Files or directories to package. Defaults to current directory.")
+    @Argument(help: "Files or directories to package. Defaults to the current directory.")
     var items: [String] = []
 
-    @Option(name: [.short, .long], help: "Custom archive name (without extension).")
+    @OptionGroup var output: OutputOptions
+
+    @Option(name: [.short, .long], help: "Archive name, without the .zip extension.")
     var name: String?
 
-    @Option(name: .shortAndLong, help: "Output path for the zip file.")
-    var output: String?
+    @Option(name: [.short, .long], help: "Output file path, or a directory to place the archive in.")
+    var outputPath: String?
 
-    @Flag(name: .long, help: "Exclude .git, node_modules, .DS_Store, .env, build caches.")
+    @Flag(name: .long, help: "Exclude VCS metadata, dependencies, build output and secrets.")
     var smart = false
 
-    @Flag(name: .long, help: "Don't copy archive path to clipboard.")
+    @Option(name: .long, help: "Extra ignore pattern, gitignore style. Repeatable.")
+    var exclude: [String] = []
+
+    @Flag(name: .long, help: "Overwrite the output file if it exists.")
+    var force = false
+
+    @Flag(name: .long, help: "Do not copy the archive path to the clipboard.")
     var noCopy = false
 
-    @Flag(name: .long, help: "Show what would happen without creating the archive.")
-    var dryRun = false
-
-    @Flag(name: .long, help: "Print verbose output.")
-    var verbose = false
-
-    @Flag(name: .long, help: "Suppress non-error output.")
-    var quiet = false
-
-    @Flag(name: .long, help: "Output result as JSON.")
-    var json = false
-
     func run() throws {
-        Log.verbose = verbose
-        Log.quiet = quiet
+        output.apply()
 
         let resolved = try InputResolver.resolve(items)
+        guard resolved.contains(where: { if case .file = $0 { return true }; if case .directory = $0 { return true }; return false }) else {
+            throw ShareError.usage("nothing to zip: provide at least one file or directory")
+        }
 
-        if dryRun {
-            let archiveName = name ?? defaultName(for: resolved)
-            let slug = DateSlug.current()
-            let outputName: String
-            if let out = output {
-                outputName = out
-            } else {
-                outputName = Packager.tempDirectory().appendingPathComponent("\(archiveName)-\(slug).zip").path
-            }
+        var options = PrepareOptions(destination: "zip")
+        options.smart = smart
+        options.excludePatterns = exclude
+        options.noZip = true  // we call zipOnly ourselves to control the output path
+        options.verbose = output.verbose
+        options.quiet = output.quiet
+        options.dryRun = output.dryRun
+        options.archiveName = name
 
-            if json {
-                let result: [String: Any] = [
-                    "ok": true,
-                    "destination": "zip",
-                    "outputPath": outputName,
-                    "dryRun": true,
-                ]
-                let data = try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys])
-                print(String(data: data, encoding: .utf8) ?? "{}")
-            } else {
-                for item in resolved {
-                    switch item {
-                    case .file(let url): print("Would package: \(url.path)")
-                    case .directory(let url): print("Would package: \(url.path)")
-                    case .url(let url): print("Would skip:    \(url.absoluteString) (not a file)")
-                    case .text: print("Would skip:    (text input)")
-                    }
-                }
-                print("Would create:  \(outputName)")
-            }
+        let archiveName = name ?? Packager.defaultArchiveName(for: resolved)
+        // Validate the destination before doing any work so a clobber is refused up front.
+        let plannedOutput = try Packager.resolveOutput(outputPath, name: archiveName, overwrite: force)
+
+        if output.dryRun {
+            let prepared = try Preparer.prepare(resolved, options: options)
+            Runner.printDryRun(destination: "zip", items: prepared, json: output.json, details: [("output", plannedOutput.path)])
             return
         }
 
-        let effectiveItems: [ShareItem]
-        if smart {
-            effectiveItems = try resolved.map { item -> ShareItem in
-                if case .directory(let url) = item {
-                    let cleaned = try SmartExclude.stage(directory: url, verbose: verbose)
-                    return .directory(cleaned)
-                }
-                return item
-            }
-        } else {
-            effectiveItems = resolved
+        // Preparer handles safety checks, secrets and smart staging; packaging happens below.
+        let staged = try Preparer.prepare(resolved, options: options)
+        let stagedItems: [ShareItem] = staged.compactMap { item in
+            guard let url = item.fileURL else { return nil }
+            var isDir: ObjCBool = false
+            FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+            return isDir.boolValue ? .directory(url) : .file(url)
         }
 
-        let zipURL = try Packager.zipOnly(items: effectiveItems, archiveName: name, outputPath: output, verbose: verbose)
+        let zipURL = try Packager.zipOnly(items: stagedItems, archiveName: archiveName, outputPath: plannedOutput.path, overwrite: force, verbose: output.verbose)
 
-        if !noCopy {
+        let shouldCopy = !noCopy && (ShareConfig.current.copyZip ?? true)
+        if shouldCopy {
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
             pasteboard.setString(zipURL.path, forType: .string)
@@ -97,34 +82,20 @@ struct ZipCommand: ParsableCommand {
 
         History.record(destination: "zip", recipient: nil, items: items.isEmpty ? ["."] : items, archivePath: zipURL.path)
 
-        if json {
-            let size = (try? FileManager.default.attributesOfItem(atPath: zipURL.path)[.size] as? Int64) ?? 0
-            let result: [String: Any] = [
+        let size = Packager.fileSize(zipURL) ?? 0
+        if output.json {
+            print(JSONOutput.format([
                 "ok": true,
                 "destination": "zip",
                 "outputPath": zipURL.path,
-                "sizeBytes": size as Any,
-                "copiedToClipboard": !noCopy,
-            ]
-            let data = try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys])
-            print(String(data: data, encoding: .utf8) ?? "{}")
+                "sizeBytes": size,
+                "copiedToClipboard": shouldCopy,
+            ] as [String: Any]))
         } else {
-            let size = HumanReadable.fileSizeAt(zipURL.path) ?? ""
-            print("\(zipURL.path) " + Color.dim("(\(size))"))
-            if !noCopy && !quiet {
-                Log.success("Copied to clipboard ✓")
-            }
+            print(zipURL.path)
+            fflush(stdout)
+            Log.info(Color.dim("(\(HumanReadable.fileSize(size)))") + (shouldCopy ? Color.green("  path copied to clipboard ✓") : ""))
         }
-    }
-
-    private func defaultName(for items: [ShareItem]) -> String {
-        if items.count == 1 {
-            switch items[0] {
-            case .file(let url): return url.deletingPathExtension().lastPathComponent
-            case .directory(let url): return url.lastPathComponent
-            default: return "share-bundle"
-            }
-        }
-        return "share-bundle"
+        Notifier.sendIfEnabled(message: "Created \(zipURL.lastPathComponent)")
     }
 }

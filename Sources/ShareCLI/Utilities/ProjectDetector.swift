@@ -1,58 +1,50 @@
 import Foundation
 
-enum ProjectType {
-    case node
-    case swift
-    case python
-    case rust
-    case go
-    case ruby
-    case java
-    case unknown
+enum ProjectType: String, CaseIterable {
+    case node, swift, python, rust, go, ruby, java, dotnet, elixir, php, dart, xcode, unknown
 }
 
+/// Guesses the kind of project in a directory so smart mode can skip its build output.
 enum ProjectDetector {
     static func detect(at directory: URL? = nil) -> ProjectType {
         let dir = directory ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let fm = FileManager.default
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return .unknown }
+        let names = Set(entries)
 
-        if fm.fileExists(atPath: dir.appendingPathComponent("package.json").path) { return .node }
-        if fm.fileExists(atPath: dir.appendingPathComponent("Package.swift").path) { return .swift }
-        if fm.fileExists(atPath: dir.appendingPathComponent("Cargo.toml").path) { return .rust }
-        if fm.fileExists(atPath: dir.appendingPathComponent("go.mod").path) { return .go }
-        if fm.fileExists(atPath: dir.appendingPathComponent("Gemfile").path) { return .ruby }
-        if fm.fileExists(atPath: dir.appendingPathComponent("requirements.txt").path) ||
-           fm.fileExists(atPath: dir.appendingPathComponent("pyproject.toml").path) ||
-           fm.fileExists(atPath: dir.appendingPathComponent("setup.py").path) { return .python }
-        if fm.fileExists(atPath: dir.appendingPathComponent("pom.xml").path) ||
-           fm.fileExists(atPath: dir.appendingPathComponent("build.gradle").path) { return .java }
+        if names.contains("package.json") { return .node }
+        if names.contains("Package.swift") { return .swift }
+        if names.contains(where: { $0.hasSuffix(".xcodeproj") || $0.hasSuffix(".xcworkspace") }) { return .xcode }
+        if names.contains("Cargo.toml") { return .rust }
+        if names.contains("go.mod") { return .go }
+        if names.contains("Gemfile") { return .ruby }
+        if names.contains("mix.exs") { return .elixir }
+        if names.contains("composer.json") { return .php }
+        if names.contains("pubspec.yaml") { return .dart }
+        if names.contains("requirements.txt") || names.contains("pyproject.toml") || names.contains("setup.py") || names.contains("Pipfile") {
+            return .python
+        }
+        if names.contains("pom.xml") || names.contains("build.gradle") || names.contains("build.gradle.kts") { return .java }
+        if names.contains(where: { $0.hasSuffix(".csproj") || $0.hasSuffix(".sln") || $0.hasSuffix(".fsproj") }) { return .dotnet }
 
         return .unknown
     }
 
-    static func excludes(for type: ProjectType) -> Set<String> {
-        var base: Set<String> = [".git", ".DS_Store"]
-
+    /// Extra ignore patterns for a project type, on top of `ExcludeRules.alwaysExcluded`.
+    static func excludes(for type: ProjectType) -> [String] {
         switch type {
-        case .node:
-            base.formUnion(["node_modules", ".next", ".nuxt", "dist", ".cache", ".parcel-cache", "coverage"])
-        case .swift:
-            base.formUnion([".build", ".swiftpm", "DerivedData", "Packages"])
-        case .python:
-            base.formUnion(["__pycache__", ".pytest_cache", ".mypy_cache", "venv", ".venv", ".tox", "*.egg-info", "dist", "build"])
-        case .rust:
-            base.formUnion(["target"])
-        case .go:
-            base.formUnion(["vendor"])
-        case .ruby:
-            base.formUnion(["vendor/bundle", ".bundle", "tmp"])
-        case .java:
-            base.formUnion(["target", "build", ".gradle", "out"])
-        case .unknown:
-            break
+        case .node: return [".next", ".nuxt", ".svelte-kit", ".output", "coverage", ".eslintcache", "*.tsbuildinfo"]
+        case .swift: return ["Packages", "*.xcuserdatad", "xcuserdata"]
+        case .xcode: return ["xcuserdata", "*.xcuserdatad", "*.xcarchive", "Carthage/Build"]
+        case .python: return ["*.egg-info", ".tox", ".nox", "htmlcov", ".coverage", ".eggs", "*.pyo", ".ipynb_checkpoints"]
+        case .rust: return ["target"]
+        case .go: return ["vendor", "*.test"]
+        case .ruby: return ["vendor/bundle", ".bundle", "tmp", "log", "coverage"]
+        case .java: return [".gradle", "out", "*.class", ".settings", ".classpath", ".project"]
+        case .dotnet: return ["bin", "obj", "*.user", ".vs", "packages", "TestResults"]
+        case .elixir: return ["_build", "deps", ".elixir_ls", "*.beam"]
+        case .php: return ["vendor", ".phpunit.result.cache"]
+        case .dart: return [".dart_tool", ".pub-cache", ".flutter-plugins", ".flutter-plugins-dependencies"]
+        case .unknown: return []
         }
-
-        base.formUnion([".env", ".env.local", ".env.production", ".env.development"])
-        return base
     }
 }

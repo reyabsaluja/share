@@ -1,90 +1,65 @@
-import XCTest
+import Foundation
+import Testing
 @testable import share
 
-final class InputResolverTests: XCTestCase {
-    func testEmptyArgumentsDefaultsToCurrentDirectory() throws {
-        let items = try InputResolver.resolve([])
-        XCTAssertEqual(items.count, 1)
-        if case .directory(let url) = items[0] {
-            XCTAssertEqual(url.path, FileManager.default.currentDirectoryPath)
-        } else {
-            XCTFail("Expected directory item")
+extension ShareTests {
+    @Suite struct InputResolverTests {
+        @Test func emptyArgumentsMeanCurrentDirectory() throws {
+            let items = try InputResolver.resolve([])
+            #expect(items.count == 1)
+            guard case .directory(let url) = items[0] else { Issue.record("expected directory"); return }
+            #expect(url.path == FileManager.default.currentDirectoryPath)
         }
-    }
 
-    func testURLDetection() {
-        XCTAssertTrue(InputResolver.isURL("http://example.com"))
-        XCTAssertTrue(InputResolver.isURL("https://example.com"))
-        XCTAssertTrue(InputResolver.isURL("HTTPS://EXAMPLE.COM"))
-        XCTAssertTrue(InputResolver.isURL("mailto:test@example.com"))
-        XCTAssertFalse(InputResolver.isURL("./file.txt"))
-        XCTAssertFalse(InputResolver.isURL("/usr/local/bin"))
-        XCTAssertFalse(InputResolver.isURL("relative/path"))
-    }
-
-    func testURLResolution() throws {
-        let items = try InputResolver.resolve(["https://apple.com"])
-        XCTAssertEqual(items.count, 1)
-        if case .url(let url) = items[0] {
-            XCTAssertEqual(url.absoluteString, "https://apple.com")
-        } else {
-            XCTFail("Expected URL item")
+        @Test func urlDetection() {
+            #expect(InputResolver.isURL("http://example.com"))
+            #expect(InputResolver.isURL("HTTPS://EXAMPLE.COM"))
+            #expect(InputResolver.isURL("mailto:test@example.com"))
+            #expect(!InputResolver.isURL("./file.txt"))
+            #expect(!InputResolver.isURL("relative/path"))
         }
-    }
 
-    func testNonExistentPathThrows() {
-        XCTAssertThrowsError(try InputResolver.resolve(["./nonexistent-file-abc123.txt"])) { error in
-            guard let shareError = error as? ShareError else {
-                XCTFail("Expected ShareError")
-                return
-            }
-            if case .inputNotFound = shareError {
-                // expected
-            } else {
-                XCTFail("Expected inputNotFound error")
+        @Test func urlResolution() throws {
+            let items = try InputResolver.resolve(["https://apple.com"])
+            #expect(items == [.url(URL(string: "https://apple.com")!)])
+        }
+
+        @Test func invalidURLThrows() {
+            #expect(throws: ShareError.self) { try InputResolver.resolve(["https://"]) }
+        }
+
+        @Test func missingPathThrowsInputNotFound() {
+            do {
+                _ = try InputResolver.resolve(["./nonexistent-file-abc123.txt"])
+                Issue.record("expected an error")
+            } catch let error as ShareError {
+                guard case .inputNotFound = error else { Issue.record("wrong error \(error)"); return }
+                #expect(error.exitCode == 3)
+            } catch {
+                Issue.record("wrong error type")
             }
         }
-    }
 
-    func testExistingFileResolution() throws {
-        let tmpFile = FileManager.default.temporaryDirectory.appendingPathComponent("share-test-\(UUID().uuidString).txt")
-        try "test".write(to: tmpFile, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: tmpFile) }
-
-        let items = try InputResolver.resolve([tmpFile.path])
-        XCTAssertEqual(items.count, 1)
-        if case .file(let url) = items[0] {
-            XCTAssertEqual(url.path, tmpFile.path)
-        } else {
-            XCTFail("Expected file item")
-        }
-    }
-
-    func testDirectoryResolution() throws {
-        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("share-test-dir-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tmpDir) }
-
-        let items = try InputResolver.resolve([tmpDir.path])
-        XCTAssertEqual(items.count, 1)
-        if case .directory(let url) = items[0] {
-            XCTAssertEqual(url.path, tmpDir.path)
-        } else {
-            XCTFail("Expected directory item")
-        }
-    }
-
-    func testMultipleInputs() throws {
-        let tmpFile1 = FileManager.default.temporaryDirectory.appendingPathComponent("share-multi-1-\(UUID().uuidString).txt")
-        let tmpFile2 = FileManager.default.temporaryDirectory.appendingPathComponent("share-multi-2-\(UUID().uuidString).txt")
-        try "a".write(to: tmpFile1, atomically: true, encoding: .utf8)
-        try "b".write(to: tmpFile2, atomically: true, encoding: .utf8)
-        defer {
-            try? FileManager.default.removeItem(at: tmpFile1)
-            try? FileManager.default.removeItem(at: tmpFile2)
+        @Test func filesAndDirectoriesResolve() throws {
+            let sandbox = try Sandbox()
+            let file = try sandbox.file("a.txt")
+            let dir = try sandbox.directory("d")
+            let items = try InputResolver.resolve([file.path, dir.path, "https://example.com"])
+            #expect(items.count == 3)
+            #expect(items[0] == .file(file.standardized))
+            #expect(items[1] == .directory(dir.standardized))
         }
 
-        let items = try InputResolver.resolve([tmpFile1.path, "https://example.com", tmpFile2.path])
-        XCTAssertEqual(items.count, 3)
+        @Test func tildeAndRelativePathsExpand() {
+            let home = InputResolver.expandPath("~")
+            #expect(home.path == FileManager.default.homeDirectoryForCurrentUser.standardized.path)
+            let rel = InputResolver.expandPath("./x/../y")
+            #expect(rel.path == URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("y").path)
+        }
+
+        @Test func existsAsFileIgnoresURLsAndDash() {
+            #expect(!InputResolver.existsAsFile("https://example.com"))
+            #expect(!InputResolver.existsAsFile("-"))
+        }
     }
 }
